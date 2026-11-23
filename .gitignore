@@ -1,0 +1,23 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Licensed / downloaded market data (Databento licence does not allow redistribution)
+data/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pkl
+*.pkl.zst
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,13 @@
+instrument,session,family,best_config,configs,trades,net,win_rate,max_dd,hit_1250_before_fail,initial_pass,walk_forward_pass,pbo_pass,deflated_sharpe_pass,cost_stress_pass,nearby_pass,all_pass,walk_forward_oos,pbo,dsr,stress_worst_net,nearby_positive
+MGC,asia,VP 80% rule,"va_pct=0.8, rr=3",15,13,292.63,0.462,176.29,False,False,True,True,False,True,True,False,56.45,0.343,0.288,37.54,2/2
+MGC,asia,VP edge reject,"va_pct=0.7, rr=2.5",15,103,-301.14,0.311,636.9,False,False,False,False,False,False,False,False,-552.97,0.971,0.036,-999.99,0/4
+MGC,asia,VP acceptance,"va_pct=0.8, rr=3",15,50,38.12,0.26,552.96,False,True,False,False,False,False,False,False,-150.63,0.571,0.088,-137.88,0/2
+MGC,new_york,VP 80% rule,"va_pct=0.6, rr=1.5",15,15,-117.08,0.467,362.43,False,False,False,False,False,False,False,False,-301.04,0.529,0.027,-169.58,0/3
+MGC,new_york,VP edge reject,"va_pct=0.8, rr=3",15,48,393.79,0.354,702.96,False,True,True,True,False,True,False,False,56.95,0.329,0.106,122.23,1/2
+MGC,new_york,VP acceptance,"va_pct=0.8, rr=3",15,27,559.43,0.333,847.57,False,True,False,True,False,True,False,False,-638.24,0.414,0.17,463.93,1/2
+MNQ,asia,VP 80% rule,"va_pct=0.8, rr=2",15,9,146.23,0.444,91.99,False,False,False,False,False,True,True,False,-251.2,0.643,0.06,119.23,2/3
+MNQ,asia,VP edge reject,"va_pct=0.6, rr=3",15,77,687.44,0.364,622.24,False,True,True,True,False,True,True,False,112.64,0.314,0.119,451.44,2/2
+MNQ,asia,VP acceptance,"va_pct=0.8, rr=3",15,33,-119.23,0.273,337.77,False,False,False,True,False,False,False,False,-360.81,0.414,0.011,-218.23,0/2
+MNQ,new_york,VP 80% rule,"va_pct=0.8, rr=2",15,17,544.74,0.471,170.33,False,False,False,True,False,True,True,False,-132.57,0.486,0.085,493.74,3/3
+MNQ,new_york,VP edge reject,"va_pct=0.6, rr=1",15,45,425.21,0.578,340.5,False,True,False,False,False,True,False,False,-180.45,0.7,0.05,288.21,0/2
+MNQ,new_york,VP acceptance,"va_pct=0.8, rr=1",15,27,-695.78,0.37,912.52,False,False,False,True,False,False,False,False,-685.69,0.314,0.0,-777.28,0/2

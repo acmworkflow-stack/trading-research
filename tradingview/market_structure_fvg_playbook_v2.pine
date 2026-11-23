@@ -1,0 +1,1714 @@
+//@version=6
+indicator("Market Structure + Sessions + Lima/Marcus + Oscar + New Models", "MS FVG + 7", overlay=true, max_bars_back=1000, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// Running P&L table: one lookback for every setup, shown first in Settings.
+string G_PNL = "Running P&L table"
+bool pnlShow = input.bool(true, "Show running P&L table", group=G_PNL)
+bool pnlAll = input.bool(false, "Count all loaded history", group=G_PNL, tooltip="On: every trade in the chart's loaded history. Off: only the lookback below.")
+int pnlDays = input.int(30, "Lookback (days)", minval=1, maxval=365, group=G_PNL)
+bool biasShow = input.bool(true, "Show bias table (5m to weekly)", group=G_PNL)
+int pnlCutoff = pnlAll ? 0 : last_bar_time - pnlDays * 86400000
+
+// Modular, original Pine implementation of the requested chart tools.
+// Session hours use the selected timezone. Defaults are New York-local and
+// follow daylight saving time automatically.
+
+string G_SESS = "Sessions"
+string tz = input.string("America/New_York", "Timezone", group=G_SESS, tooltip="IANA timezone, for example America/New_York")
+bool showSessBoxes = input.bool(true, "Show session ranges", group=G_SESS)
+bool showSessHL = input.bool(true, "Extend completed session high/low", group=G_SESS)
+int keepSessions = input.int(5, "Sessions kept per market", minval=1, maxval=50, group=G_SESS)
+int sessionLevelBars = input.int(30, "High/low line length (bars)", minval=1, maxval=500, group=G_SESS)
+int sessionFillFade = input.int(90, "Range fill transparency", minval=0, maxval=100, group=G_SESS)
+int markFade = input.int(72, "Line transparency", minval=0, maxval=100, group=G_SESS)
+bool showA = input.bool(true, "New York", inline="a", group=G_SESS)
+string sessA = input.session("0930-1600", "", inline="a", group=G_SESS)
+bool showB = input.bool(true, "London", inline="b", group=G_SESS)
+string sessB = input.session("0300-1200", "", inline="b", group=G_SESS)
+bool showC = input.bool(true, "Tokyo", inline="c", group=G_SESS)
+string sessC = input.session("1900-0400", "", inline="c", group=G_SESS)
+bool showD = input.bool(true, "Sydney", inline="d", group=G_SESS)
+string sessD = input.session("1800-0300", "", inline="d", group=G_SESS)
+color colA = input.color(#C3A675, "NY", inline="colors", group=G_SESS)
+color colB = input.color(#8496AA, "", inline="colors", group=G_SESS)
+color colC = input.color(#A895A8, "", inline="colors", group=G_SESS)
+color colD = input.color(#8FA7A0, "", inline="colors", group=G_SESS)
+
+color softBull = #66877D
+color softBear = #A96F68
+color softBlue = #617891
+color softGold = #A58754
+color softNeutral = #77808A
+color panelCream = #E9E3D9
+color panelInk = #383A3D
+
+var box[] sessionBoxes = array.new_box()
+var line[] sessionLines = array.new_line()
+var label[] sessionLabels = array.new_label()
+var label[] sessionNameLabels = array.new_label()
+f_session(bool enabled, string hours, string name, color shade) =>
+    bool active = enabled and not na(time(timeframe.period, hours, tz))
+    bool started = active and not active[1]
+    bool ended = not active and active[1]
+    var float hi = na
+    var float lo = na
+    var int startBar = na
+    var box bx = na
+    var label nameTag = na
+    if started
+        hi := high
+        lo := low
+        startBar := bar_index
+        if showSessBoxes
+            bx := box.new(bar_index, high, bar_index, low, bgcolor=color.new(shade, sessionFillFade), border_color=color.new(shade, markFade))
+            nameTag := label.new(bar_index, high, name, style=label.style_label_down, color=color.new(shade, 8), textcolor=panelInk, size=size.normal)
+            array.push(sessionBoxes, bx)
+            array.push(sessionNameLabels, nameTag)
+            if array.size(sessionBoxes) > keepSessions * 4
+                box.delete(array.shift(sessionBoxes))
+            if array.size(sessionNameLabels) > keepSessions * 4
+                label.delete(array.shift(sessionNameLabels))
+    if active
+        hi := math.max(nz(hi, high), high)
+        lo := math.min(nz(lo, low), low)
+        if showSessBoxes and not na(bx)
+            box.set_right(bx, bar_index)
+            box.set_top(bx, hi)
+            box.set_bottom(bx, lo)
+        if showSessBoxes and not na(nameTag)
+            int midBar = int(math.floor((startBar + bar_index) / 2.0))
+            label.set_x(nameTag, midBar)
+            label.set_y(nameTag, hi)
+    if ended and showSessHL and not na(hi) and not na(lo)
+        line h = line.new(startBar, hi, bar_index + sessionLevelBars, hi, extend=extend.none, color=color.new(shade, markFade), style=line.style_dashed, width=1)
+        line l = line.new(startBar, lo, bar_index + sessionLevelBars, lo, extend=extend.none, color=color.new(shade, markFade), style=line.style_dashed, width=1)
+        array.push(sessionLines, h)
+        array.push(sessionLines, l)
+        label highLabel = label.new(bar_index + sessionLevelBars, hi, name + " H", style=label.style_none, textcolor=color.new(shade, 10), size=size.tiny)
+        label lowLabel = label.new(bar_index + sessionLevelBars, lo, name + " L", style=label.style_none, textcolor=color.new(shade, 10), size=size.tiny)
+        array.push(sessionLabels, highLabel)
+        array.push(sessionLabels, lowLabel)
+        if array.size(sessionLines) > keepSessions * 8
+            line.delete(array.shift(sessionLines))
+            line.delete(array.shift(sessionLines))
+            label.delete(array.shift(sessionLabels))
+            label.delete(array.shift(sessionLabels))
+    active
+
+f_session(showA, sessA, "New York", colA)
+f_session(showB, sessB, "London", colB)
+f_session(showC, sessC, "Tokyo", colC)
+f_session(showD, sessD, "Sydney", colD)
+
+string G_LIQ = "Liquidity swings"
+bool showLiquidity = input.bool(false, "Show swing liquidity (context markers)", group=G_LIQ)
+int liqLen = input.int(5, "Pivot strength", minval=1, maxval=50, group=G_LIQ)
+bool extendLiquidity = input.bool(false, "Extend until swept", group=G_LIQ)
+int liqRangeBars = input.int(30, "Level length (bars)", minval=1, maxval=500, group=G_LIQ)
+int keepLiq = input.int(20, "Maximum levels", minval=1, maxval=200, group=G_LIQ)
+bool liqTimeframeAllowed = timeframe.in_seconds() >= timeframe.in_seconds("5")
+var line[] liqLines = array.new_line()
+var label[] liqLabels = array.new_label()
+var float[] liqPrices = array.new_float()
+var bool[] liqIsHigh = array.new_bool()
+float ph = ta.pivothigh(high, liqLen, liqLen)
+float pl = ta.pivotlow(low, liqLen, liqLen)
+if showLiquidity and liqTimeframeAllowed and not na(ph)
+    line ln = line.new(bar_index-liqLen, ph, bar_index+liqRangeBars, ph, extend=extendLiquidity ? extend.right : extend.none, color=color.new(softBear, markFade), style=line.style_dotted)
+    label tag = label.new(bar_index+liqRangeBars, ph, "BSL", style=label.style_none, textcolor=color.new(softBear, 15), size=size.tiny)
+    array.push(liqLines, ln)
+    array.push(liqLabels, tag)
+    array.push(liqPrices, ph)
+    array.push(liqIsHigh, true)
+if showLiquidity and liqTimeframeAllowed and not na(pl)
+    line ln = line.new(bar_index-liqLen, pl, bar_index+liqRangeBars, pl, extend=extendLiquidity ? extend.right : extend.none, color=color.new(softBull, markFade), style=line.style_dotted)
+    label tag = label.new(bar_index+liqRangeBars, pl, "SSL", style=label.style_none, textcolor=color.new(softBull, 15), size=size.tiny)
+    array.push(liqLines, ln)
+    array.push(liqLabels, tag)
+    array.push(liqPrices, pl)
+    array.push(liqIsHigh, false)
+while array.size(liqLines) > keepLiq
+    line.delete(array.shift(liqLines))
+    label.delete(array.shift(liqLabels))
+    array.shift(liqPrices)
+    array.shift(liqIsHigh)
+if array.size(liqLines) > 0
+    for i = array.size(liqLines)-1 to 0
+        float level = array.get(liqPrices, i)
+        bool highSide = array.get(liqIsHigh, i)
+        bool swept = highSide ? high > level : low < level
+        if not extendLiquidity
+            line.set_x2(array.get(liqLines, i), bar_index + liqRangeBars)
+        label.set_x(array.get(liqLabels, i), bar_index + liqRangeBars)
+        if swept
+            line.set_x2(array.get(liqLines, i), bar_index)
+            line.set_extend(array.get(liqLines, i), extend.none)
+            label.set_x(array.get(liqLabels, i), bar_index)
+            label.set_textcolor(array.get(liqLabels, i), color.new(highSide ? softBear : softBull, 15))
+            array.remove(liqLines, i)
+            array.remove(liqLabels, i)
+            array.remove(liqPrices, i)
+            array.remove(liqIsHigh, i)
+
+// On sub-5-minute charts, project FVG/IFVG and liquidity marks from the selected
+// higher timeframe so the chart still shows levels to target.
+string G_MTF = "Lower timeframe higher-timeframe overlay"
+string overlayTf = input.timeframe("15", "Higher timeframe to show", group=G_MTF)
+int mtfGapKeep = input.int(20, "Higher-timeframe gaps kept", minval=1, maxval=100, group=G_MTF)
+int mtfLiqKeep = input.int(20, "Higher-timeframe liquidity levels kept", minval=1, maxval=100, group=G_MTF)
+bool showIFVG = input.bool(true, "Mark inversions (IFVG)", group="FVG / IFVG")
+int extendBars = input.int(20, "Gap length (bars)", minval=0, maxval=500, group="FVG / IFVG")
+bool mtfOverlayActive = timeframe.in_seconds(overlayTf) > timeframe.in_seconds()
+[mtfBullEvent, mtfBullTop, mtfBullBottom, mtfBearEvent, mtfBearTop, mtfBearBottom] = request.security(syminfo.tickerid, overlayTf, [low[1] > high[3], low[1], high[3], high[1] < low[3], low[3], high[1]], lookahead=barmerge.lookahead_on)
+float mtfPivotHigh = request.security(syminfo.tickerid, overlayTf, ta.pivothigh(high, liqLen, liqLen)[1], lookahead=barmerge.lookahead_on)
+float mtfPivotLow = request.security(syminfo.tickerid, overlayTf, ta.pivotlow(low, liqLen, liqLen)[1], lookahead=barmerge.lookahead_on)
+float mtfSourceClose = request.security(syminfo.tickerid, overlayTf, close[1], lookahead=barmerge.lookahead_on)
+bool mtfNewBar = timeframe.change(overlayTf)
+
+var box[] mtfGaps = array.new_box()
+var float[] mtfGapTops = array.new_float()
+var float[] mtfGapBottoms = array.new_float()
+var bool[] mtfGapBulls = array.new_bool()
+var bool[] mtfGapFlips = array.new_bool()
+if mtfOverlayActive and mtfNewBar and mtfBullEvent
+    box b = box.new(bar_index, mtfBullTop, bar_index+extendBars, mtfBullBottom, bgcolor=color.new(softBull, 95), border_color=color.new(softBull, markFade), text=overlayTf + " FVG", text_color=color.new(softBull, 20), text_size=size.tiny)
+    array.push(mtfGaps, b)
+    array.push(mtfGapTops, mtfBullTop)
+    array.push(mtfGapBottoms, mtfBullBottom)
+    array.push(mtfGapBulls, true)
+    array.push(mtfGapFlips, false)
+if mtfOverlayActive and mtfNewBar and mtfBearEvent
+    box b = box.new(bar_index, mtfBearTop, bar_index+extendBars, mtfBearBottom, bgcolor=color.new(softBear, 95), border_color=color.new(softBear, markFade), text=overlayTf + " FVG", text_color=color.new(softBear, 20), text_size=size.tiny)
+    array.push(mtfGaps, b)
+    array.push(mtfGapTops, mtfBearTop)
+    array.push(mtfGapBottoms, mtfBearBottom)
+    array.push(mtfGapBulls, false)
+    array.push(mtfGapFlips, false)
+while array.size(mtfGaps) > mtfGapKeep
+    box.delete(array.shift(mtfGaps))
+    array.shift(mtfGapTops)
+    array.shift(mtfGapBottoms)
+    array.shift(mtfGapBulls)
+    array.shift(mtfGapFlips)
+if mtfOverlayActive and array.size(mtfGaps) > 0
+    for i = array.size(mtfGaps)-1 to 0
+        box b = array.get(mtfGaps, i)
+        float top = array.get(mtfGapTops, i)
+        float bottom = array.get(mtfGapBottoms, i)
+        bool bullish = array.get(mtfGapBulls, i)
+        bool flipped = array.get(mtfGapFlips, i)
+        if not flipped
+            box.set_right(b, bar_index+extendBars)
+            bool inversion = bullish ? mtfSourceClose < bottom : mtfSourceClose > top
+            bool filled = bullish ? low <= bottom : high >= top
+            if inversion and showIFVG
+                array.set(mtfGapFlips, i, true)
+                box.set_bgcolor(b, bullish ? color.new(softBear, 95) : color.new(softBull, 95))
+                box.set_border_color(b, bullish ? color.new(softBear, markFade) : color.new(softBull, markFade))
+                box.set_text(b, overlayTf + " IFVG")
+            else if filled
+                box.delete(b)
+                array.remove(mtfGaps, i)
+                array.remove(mtfGapTops, i)
+                array.remove(mtfGapBottoms, i)
+                array.remove(mtfGapBulls, i)
+                array.remove(mtfGapFlips, i)
+        else
+            bool invalid = bullish ? mtfSourceClose > top : mtfSourceClose < bottom
+            if invalid
+                box.delete(b)
+                array.remove(mtfGaps, i)
+                array.remove(mtfGapTops, i)
+                array.remove(mtfGapBottoms, i)
+                array.remove(mtfGapBulls, i)
+                array.remove(mtfGapFlips, i)
+
+var line[] mtfLiqLines = array.new_line()
+var label[] mtfLiqLabels = array.new_label()
+var float[] mtfLiqPrices = array.new_float()
+var bool[] mtfLiqHighs = array.new_bool()
+if mtfOverlayActive and mtfNewBar and showLiquidity and not na(mtfPivotHigh)
+    line ln = line.new(bar_index, mtfPivotHigh, bar_index+liqRangeBars, mtfPivotHigh, color=color.new(softBear, markFade), style=line.style_dotted)
+    label tag = label.new(bar_index+liqRangeBars, mtfPivotHigh, overlayTf + " BSL", style=label.style_none, textcolor=color.new(softBear, 15), size=size.tiny)
+    array.push(mtfLiqLines, ln)
+    array.push(mtfLiqLabels, tag)
+    array.push(mtfLiqPrices, mtfPivotHigh)
+    array.push(mtfLiqHighs, true)
+if mtfOverlayActive and mtfNewBar and showLiquidity and not na(mtfPivotLow)
+    line ln = line.new(bar_index, mtfPivotLow, bar_index+liqRangeBars, mtfPivotLow, color=color.new(softBull, markFade), style=line.style_dotted)
+    label tag = label.new(bar_index+liqRangeBars, mtfPivotLow, overlayTf + " SSL", style=label.style_none, textcolor=color.new(softBull, 15), size=size.tiny)
+    array.push(mtfLiqLines, ln)
+    array.push(mtfLiqLabels, tag)
+    array.push(mtfLiqPrices, mtfPivotLow)
+    array.push(mtfLiqHighs, false)
+while array.size(mtfLiqLines) > mtfLiqKeep
+    line.delete(array.shift(mtfLiqLines))
+    label.delete(array.shift(mtfLiqLabels))
+    array.shift(mtfLiqPrices)
+    array.shift(mtfLiqHighs)
+if mtfOverlayActive and array.size(mtfLiqLines) > 0
+    for i = array.size(mtfLiqLines)-1 to 0
+        float level = array.get(mtfLiqPrices, i)
+        bool highSide = array.get(mtfLiqHighs, i)
+        line ln = array.get(mtfLiqLines, i)
+        label tag = array.get(mtfLiqLabels, i)
+        line.set_x2(ln, bar_index+liqRangeBars)
+        label.set_x(tag, bar_index+liqRangeBars)
+        bool swept = highSide ? high > level : low < level
+        if swept
+            line.set_x2(ln, bar_index)
+            label.set_x(tag, bar_index)
+            array.remove(mtfLiqLines, i)
+            array.remove(mtfLiqLabels, i)
+            array.remove(mtfLiqPrices, i)
+            array.remove(mtfLiqHighs, i)
+
+// Previous completed period levels. Only the latest completed period is shown
+// for each timeframe; lookahead_on with [1] keeps these levels non-repainting.
+string G_HTF = "Higher timeframe highs/lows"
+bool showW = input.bool(true, "Previous week", group=G_HTF)
+bool showM = input.bool(true, "Previous month", group=G_HTF)
+bool showY = input.bool(true, "Previous year", group=G_HTF)
+int periodRangeBars = input.int(50, "Level length (bars)", minval=1, maxval=500, group=G_HTF)
+[prevWeekHigh, prevWeekLow, nmWeekDir] = request.security(syminfo.tickerid, "W", [high[1], low[1], math.sign(close[1] - open[1])], lookahead=barmerge.lookahead_on)
+float prevMonthHigh = request.security(syminfo.tickerid, "M", high[1], lookahead=barmerge.lookahead_on)
+float prevMonthLow = request.security(syminfo.tickerid, "M", low[1], lookahead=barmerge.lookahead_on)
+float prevYearHigh = request.security(syminfo.tickerid, "12M", high[1], lookahead=barmerge.lookahead_on)
+float prevYearLow = request.security(syminfo.tickerid, "12M", low[1], lookahead=barmerge.lookahead_on)
+var line weekHighLine = na
+var line weekLowLine = na
+var label weekHighTag = na
+var label weekLowTag = na
+var line monthHighLine = na
+var line monthLowLine = na
+var label monthHighTag = na
+var label monthLowTag = na
+var line yearHighLine = na
+var line yearLowLine = na
+var label yearHighTag = na
+var label yearLowTag = na
+if showW and timeframe.change("W") and not na(prevWeekHigh) and not na(prevWeekLow)
+    if not na(weekHighLine)
+        line.delete(weekHighLine)
+    if not na(weekLowLine)
+        line.delete(weekLowLine)
+    if not na(weekHighTag)
+        label.delete(weekHighTag)
+    if not na(weekLowTag)
+        label.delete(weekLowTag)
+    weekHighLine := line.new(bar_index, prevWeekHigh, bar_index+periodRangeBars, prevWeekHigh, color=color.new(softBlue, markFade), style=line.style_dashed)
+    weekLowLine := line.new(bar_index, prevWeekLow, bar_index+periodRangeBars, prevWeekLow, color=color.new(softBlue, markFade), style=line.style_dashed)
+    weekHighTag := label.new(bar_index+periodRangeBars, prevWeekHigh, "W High", style=label.style_none, textcolor=color.new(softBlue, 10), size=size.tiny)
+    weekLowTag := label.new(bar_index+periodRangeBars, prevWeekLow, "W Low", style=label.style_none, textcolor=color.new(softBlue, 10), size=size.tiny)
+if showM and timeframe.change("M") and not na(prevMonthHigh) and not na(prevMonthLow)
+    if not na(monthHighLine)
+        line.delete(monthHighLine)
+    if not na(monthLowLine)
+        line.delete(monthLowLine)
+    if not na(monthHighTag)
+        label.delete(monthHighTag)
+    if not na(monthLowTag)
+        label.delete(monthLowTag)
+    monthHighLine := line.new(bar_index, prevMonthHigh, bar_index+periodRangeBars, prevMonthHigh, color=color.new(softNeutral, markFade), style=line.style_dashed)
+    monthLowLine := line.new(bar_index, prevMonthLow, bar_index+periodRangeBars, prevMonthLow, color=color.new(softNeutral, markFade), style=line.style_dashed)
+    monthHighTag := label.new(bar_index+periodRangeBars, prevMonthHigh, "M High", style=label.style_none, textcolor=color.new(softNeutral, 10), size=size.tiny)
+    monthLowTag := label.new(bar_index+periodRangeBars, prevMonthLow, "M Low", style=label.style_none, textcolor=color.new(softNeutral, 10), size=size.tiny)
+if showY and timeframe.change("12M") and not na(prevYearHigh) and not na(prevYearLow)
+    if not na(yearHighLine)
+        line.delete(yearHighLine)
+    if not na(yearLowLine)
+        line.delete(yearLowLine)
+    if not na(yearHighTag)
+        label.delete(yearHighTag)
+    if not na(yearLowTag)
+        label.delete(yearLowTag)
+    yearHighLine := line.new(bar_index, prevYearHigh, bar_index+periodRangeBars, prevYearHigh, color=color.new(softBear, markFade), style=line.style_dashed)
+    yearLowLine := line.new(bar_index, prevYearLow, bar_index+periodRangeBars, prevYearLow, color=color.new(softBear, markFade), style=line.style_dashed)
+    yearHighTag := label.new(bar_index+periodRangeBars, prevYearHigh, "Y High", style=label.style_none, textcolor=color.new(softBear, 10), size=size.tiny)
+    yearLowTag := label.new(bar_index+periodRangeBars, prevYearLow, "Y Low", style=label.style_none, textcolor=color.new(softBear, 10), size=size.tiny)
+
+string G_SMC = "Structure (BOS / CHoCH)"
+bool showStructure = input.bool(false, "Show generic BOS and CHoCH", group=G_SMC)
+int structLen = input.int(2, "Structure pivot strength", minval=1, maxval=50, group=G_SMC)
+bool showInternal = input.bool(false, "Show internal structure", group=G_SMC)
+int structureRangeBars = input.int(20, "BOS/CHoCH line length (bars)", minval=1, maxval=500, group=G_SMC)
+var float swingHigh = na
+var float swingLow = na
+var int bias = 0
+float sh = ta.pivothigh(high, structLen, structLen)
+float sl = ta.pivotlow(low, structLen, structLen)
+if not na(sh)
+    swingHigh := sh
+if not na(sl)
+    swingLow := sl
+bool crossedAboveSwing = ta.crossover(close, swingHigh)
+bool crossedBelowSwing = ta.crossunder(close, swingLow)
+bool bullBreak = showStructure and not na(swingHigh) and crossedAboveSwing
+bool bearBreak = showStructure and not na(swingLow) and crossedBelowSwing
+if bullBreak
+    string tag = bias == -1 ? "CHoCH" : "BOS"
+    label.new(bar_index, high, "Bull " + tag, style=label.style_label_down, color=color.new(softBull, markFade), textcolor=color.new(color.white, 15), size=size.tiny)
+    line.new(bar_index-structLen, swingHigh, bar_index+structureRangeBars, swingHigh, color=color.new(softBull, markFade), style=line.style_dashed)
+    bias := 1
+if bearBreak
+    string tag = bias == 1 ? "CHoCH" : "BOS"
+    label.new(bar_index, low, "Bear " + tag, style=label.style_label_up, color=color.new(softBear, markFade), textcolor=color.new(color.white, 15), size=size.tiny)
+    line.new(bar_index-structLen, swingLow, bar_index+structureRangeBars, swingLow, color=color.new(softBear, markFade), style=line.style_dashed)
+    bias := -1
+if showInternal
+    int ilen = 2
+    float ih = ta.pivothigh(high, ilen, ilen)
+    float ilo = ta.pivotlow(low, ilen, ilen)
+    if not na(ih)
+        label.new(bar_index-ilen, ih, "iH", style=label.style_label_down, color=color.new(color.gray, 75), textcolor=color.gray, size=size.tiny)
+    if not na(ilo)
+        label.new(bar_index-ilen, ilo, "iL", style=label.style_label_up, color=color.new(color.gray, 75), textcolor=color.gray, size=size.tiny)
+
+string G_OB = "Order blocks"
+bool showPivotOB = input.bool(false, "Generic pivot-origin blocks", group=G_OB, tooltip="Context-only blocks; Marcus playbook uses the last opposing candle before a confirmed swing break.")
+bool showImpulseOB = input.bool(false, "Generic displacement-origin blocks", group=G_OB, tooltip="Context-only blocks; Marcus playbook uses the last opposing candle before a confirmed swing break.")
+int obLen = input.int(8, "Pivot lookback", minval=2, maxval=50, group=G_OB)
+float impulseAtr = input.float(1.5, "Displacement body (ATR)", minval=0.2, step=0.1, group=G_OB)
+int obRangeBars = input.int(30, "Block length (bars)", minval=1, maxval=500, group=G_OB)
+int keepOB = input.int(8, "Maximum active blocks", minval=1, maxval=100, group=G_OB)
+var box[] obBoxes = array.new_box()
+var bool[] obBull = array.new_bool()
+float atr = ta.atr(14)
+float obPH = ta.pivothigh(high, obLen, obLen)
+float obPL = ta.pivotlow(low, obLen, obLen)
+bool bullImpulse = showImpulseOB and close > open and close-open > atr*impulseAtr
+bool bearImpulse = showImpulseOB and close < open and open-close > atr*impulseAtr
+if (showPivotOB and not na(obPL)) or bullImpulse
+    int back = bullImpulse ? 1 : obLen
+    if close[back] < open[back]
+        box b = box.new(bar_index-back, high[back], bar_index+obRangeBars, low[back], bgcolor=color.new(softBull, 94), border_color=color.new(softBull, markFade))
+        array.push(obBoxes, b)
+        array.push(obBull, true)
+if (showPivotOB and not na(obPH)) or bearImpulse
+    int back = bearImpulse ? 1 : obLen
+    if close[back] > open[back]
+        box b = box.new(bar_index-back, high[back], bar_index+obRangeBars, low[back], bgcolor=color.new(softBear, 94), border_color=color.new(softBear, markFade))
+        array.push(obBoxes, b)
+        array.push(obBull, false)
+while array.size(obBoxes) > keepOB
+    box.delete(array.shift(obBoxes))
+    array.shift(obBull)
+if array.size(obBoxes) > 0
+    for i = array.size(obBoxes)-1 to 0
+        box b = array.get(obBoxes, i)
+        bool bull = array.get(obBull, i)
+        bool invalid = bull ? close < box.get_bottom(b) : close > box.get_top(b)
+        if invalid
+            box.delete(b)
+            array.remove(obBoxes, i)
+            array.remove(obBull, i)
+
+string G_FVG = "FVG / IFVG"
+bool showFVG = input.bool(false, "Show FVG / IFVG zones (context, not entries)", group=G_FVG)
+float minGapAtr = input.float(0.0, "Minimum gap in ATR (0 = all)", minval=0, step=0.1, group=G_FVG)
+int keepGaps = input.int(30, "Maximum active gaps", minval=1, maxval=300, group=G_FVG)
+bool fvgTimeframeAllowed = timeframe.in_seconds() >= timeframe.in_seconds("5")
+var box[] gapBoxes = array.new_box()
+var float[] gapTop = array.new_float()
+var float[] gapBot = array.new_float()
+var bool[] gapBull = array.new_bool()
+var bool[] gapInverted = array.new_bool()
+bool bullGap = showFVG and fvgTimeframeAllowed and bar_index >= 2 and low > high[2] and low-high[2] >= atr*minGapAtr
+bool bearGap = showFVG and fvgTimeframeAllowed and bar_index >= 2 and high < low[2] and low[2]-high >= atr*minGapAtr
+if bullGap
+    float top = low
+    float bot = high[2]
+    box b = box.new(bar_index-2, top, bar_index+extendBars, bot, bgcolor=color.new(softBull, 94), border_color=color.new(softBull, markFade), text="FVG", text_color=color.new(softBull, 20), text_size=size.tiny)
+    array.push(gapBoxes,b)
+    array.push(gapTop,top)
+    array.push(gapBot,bot)
+    array.push(gapBull,true)
+    array.push(gapInverted,false)
+if bearGap
+    float top = low[2]
+    float bot = high
+    box b = box.new(bar_index-2, top, bar_index+extendBars, bot, bgcolor=color.new(softBear, 94), border_color=color.new(softBear, markFade), text="FVG", text_color=color.new(softBear, 20), text_size=size.tiny)
+    array.push(gapBoxes,b)
+    array.push(gapTop,top)
+    array.push(gapBot,bot)
+    array.push(gapBull,false)
+    array.push(gapInverted,false)
+while array.size(gapBoxes) > keepGaps
+    box.delete(array.shift(gapBoxes))
+    array.shift(gapTop)
+    array.shift(gapBot)
+    array.shift(gapBull)
+    array.shift(gapInverted)
+if array.size(gapBoxes) > 0
+    for i = array.size(gapBoxes)-1 to 0
+        box b = array.get(gapBoxes,i)
+        float top = array.get(gapTop,i)
+        float bot = array.get(gapBot,i)
+        bool bull = array.get(gapBull,i)
+        bool inverted = array.get(gapInverted,i)
+        if not inverted
+            box.set_right(b, bar_index+extendBars)
+            bool flip = bull ? close < bot : close > top
+            bool filled = bull ? low <= bot : high >= top
+            if flip and showIFVG
+                array.set(gapInverted,i,true)
+                box.set_bgcolor(b, bull ? color.new(softBear, 94) : color.new(softBull, 94))
+                box.set_border_color(b, bull ? color.new(softBear, markFade) : color.new(softBull, markFade))
+                box.set_text(b, "IFVG")
+            else if filled
+                box.delete(b)
+                array.remove(gapBoxes,i)
+                array.remove(gapTop,i)
+                array.remove(gapBot,i)
+                array.remove(gapBull,i)
+                array.remove(gapInverted,i)
+        else
+            bool invalid = bull ? close > top : close < bot
+            if invalid
+                box.delete(b)
+                array.remove(gapBoxes,i)
+                array.remove(gapTop,i)
+                array.remove(gapBot,i)
+                array.remove(gapBull,i)
+                array.remove(gapInverted,i)
+
+alertcondition(bullBreak, "Bullish BOS / CHoCH", "Bullish structure break")
+alertcondition(bearBreak, "Bearish BOS / CHoCH", "Bearish structure break")
+alertcondition(bullGap, "Bullish FVG", "Bullish fair value gap formed")
+alertcondition(bearGap, "Bearish FVG", "Bearish fair value gap formed")
+
+//──────────────────────────────────────────────────────────────────────────────
+// LIMA / MARCUS PLAYBOOK OVERLAY
+// Lima is intended for 5m. Marcus 15 / Marcus 30 are intended for their matching
+// chart timeframe. Signals use confirmed closes; drawings mark next-bar-open entry.
+//──────────────────────────────────────────────────────────────────────────────
+string G_PLAY = "Lima / Marcus trade playbook"
+string playbook = input.string("Off", "Display setup", options=["Off", "Lima", "Marcus 15", "Marcus 30"], group=G_PLAY)
+int playPivotLen = input.int(2, "Marcus swing confirmation bars", minval=1, maxval=10, group=G_PLAY, tooltip="A pivot is not confirmed until this many candles close to its right.")
+float limaRR = input.float(1.0, "Lima target R", minval=0.5, step=0.5, group=G_PLAY)
+float marcus15RR = input.float(3.5, "Marcus 15 target R", minval=0.5, step=0.5, group=G_PLAY)
+float marcus30RR = input.float(3.0, "Marcus 30 target R", minval=0.5, step=0.5, group=G_PLAY)
+float playStopATR = input.float(1.0, "Stop distance (ATR)", minval=0.25, step=0.25, group=G_PLAY)
+int playMaxZones = input.int(200, "Playbook FVG zones kept", minval=10, maxval=500, group=G_PLAY)
+int playLabelOffset = input.int(8, "Signal label offset (bars)", minval=1, maxval=50, group=G_PLAY)
+int playContracts = input.int(1, "Simulated contracts", minval=1, maxval=100, group=G_PLAY)
+int playSlipTicks = input.int(1, "Slippage (ticks per side)", minval=0, maxval=20, group=G_PLAY)
+float playCommission = input.float(2.50, "Commission per contract per side ($)", minval=0, step=0.25, group=G_PLAY)
+
+bool isLima = playbook == "Lima"
+bool isMarcus15 = playbook == "Marcus 15"
+bool isMarcus30 = playbook == "Marcus 30"
+bool isMarcus = isMarcus15 or isMarcus30
+bool showMtfLima = input.bool(true, "Show Lima 5m signals on this chart", group=G_PLAY)
+bool showMtfMarcus15 = input.bool(true, "Show Marcus 15m signals on this chart", group=G_PLAY)
+bool showMtfMarcus30 = input.bool(true, "Show Marcus 30m signals on this chart", group=G_PLAY)
+int mtfLabelOffset = input.int(6, "MTF label offset (bars)", minval=1, maxval=40, group=G_PLAY)
+int levelLineBars = input.int(30, "Entry / stop / target line length (bars)", minval=5, maxval=200, group=G_PLAY, tooltip="Limits how far the latest trade levels project to the right. Closed trades end at their simulated exit bar.")
+bool timeframeMatches = isLima ? (timeframe.isminutes and timeframe.multiplier == 5) :
+     isMarcus15 ? (timeframe.isminutes and timeframe.multiplier == 15) :
+     isMarcus30 ? (timeframe.isminutes and timeframe.multiplier == 30) : true
+
+// New models validated 2026-11-11 (validate.py). Sessions are New York time and
+// match the backtests: NY 09:30-16:00, Asia 19:00-03:00, flat at session end.
+string G_NEW = "New models • Gold + Nasdaq"
+string NM_TZ = "America/New_York"
+string nmNYSess = input.session("0930-1600", "New York trading window (ET)", group=G_NEW)
+string nmAsiaSess = input.session("1900-0300", "Asia trading window (ET)", group=G_NEW)
+bool nmGolfOn = input.bool(true, "GOLF • Gold NY • 15m ORB retest (10m bars)", inline="golf", group=G_NEW)
+float nmGolfRR = input.float(3.0, "R", minval=0.5, step=0.5, inline="golf", group=G_NEW)
+bool nmHotelOn = input.bool(true, "HOTEL • Gold NY • BB + RSI (5m)", inline="hotel", group=G_NEW)
+float nmHotelRR = input.float(3.0, "R", minval=0.5, step=0.5, inline="hotel", group=G_NEW)
+bool nmAlphaOn = input.bool(true, "ALPHA • Gold Asia • 30m FVG + order block", inline="alpha", group=G_NEW)
+float nmAlphaRR = input.float(3.0, "R", minval=0.5, step=0.5, inline="alpha", group=G_NEW)
+bool nmKiloOn = input.bool(true, "KILO • Gold Asia • BB + RSI (5m)", inline="kilo", group=G_NEW)
+float nmKiloRR = input.float(2.0, "R", minval=0.5, step=0.5, inline="kilo", group=G_NEW)
+bool nmMikeOn = input.bool(true, "MIKE • Nasdaq NY • 30m FVG + order block", inline="mike", group=G_NEW)
+float nmMikeRR = input.float(2.5, "R", minval=0.5, step=0.5, inline="mike", group=G_NEW)
+bool nmTangoOn = input.bool(true, "TANGO • Nasdaq Asia • 15m FVG + order block", inline="tango", group=G_NEW)
+float nmTangoRR = input.float(2.0, "R", minval=0.5, step=0.5, inline="tango", group=G_NEW)
+bool nmSierraOn = input.bool(true, "SIERRA • Nasdaq Asia • 15m FVG + BOS/CHoCH", inline="sierra", group=G_NEW)
+float nmSierraRR = input.float(1.0, "R", minval=0.5, step=0.5, inline="sierra", group=G_NEW)
+bool nmVictorOn = input.bool(true, "VICTOR • Nasdaq Asia • FVG 5/15/30 + VWAP", inline="victor", group=G_NEW)
+float nmVictorRR = input.float(2.5, "R", minval=0.5, step=0.5, inline="victor", group=G_NEW)
+bool nmEchoOn = input.bool(true, "ECHO • Nasdaq Asia • volume profile VAH/VAL rejection", inline="echo", group=G_NEW)
+float nmEchoRR = input.float(3.0, "R", minval=0.5, step=0.5, inline="echo", group=G_NEW)
+float nmEchoVA = input.float(0.6, "Echo value area (share of volume)", minval=0.5, maxval=0.9, step=0.05, group=G_NEW)
+bool nmShowVP = input.bool(true, "Plot prior NY session POC / VAH / VAL", group=G_NEW)
+bool nmScoreWeekly = input.bool(false, "Include weekly bias in the score (tested: no edge)", group=G_NEW)
+float nmLimaBB = input.float(2.0, "Hotel / Kilo Bollinger σ", minval=0.5, step=0.5, group=G_NEW)
+float nmLimaRSI = input.float(25.0, "Hotel / Kilo RSI long level (short = 100 − level)", minval=5, maxval=50, step=5, group=G_NEW)
+int nmSlipTicks = input.int(1, "Slippage (ticks per side)", minval=0, maxval=20, group=G_NEW)
+float nmCommission = input.float(2.50, "Commission per contract per side ($)", minval=0, step=0.25, group=G_NEW)
+float nmRiskBudget = input.float(75.0, "Risk budget per trade ($) for contract count (≈ $600 daily limit ÷ 8)", minval=10, step=5, group=G_NEW)
+int nmKeepTrades = input.int(10, "Past trades marked per model (entry + exit)", minval=1, maxval=20, group=G_NEW)
+bool nmIsGold = syminfo.root == "MGC" or syminfo.root == "GC"
+bool nmIsNasdaq = syminfo.root == "MNQ" or syminfo.root == "NQ"
+
+// These signal engines run inside their native timeframe. Returning [1] and
+// using lookahead_on exposes only the last completed source candle.
+f_limaCore() =>
+    float mid = ta.sma(close, 20)
+    float dev = 2.0 * ta.stdev(close, 20)
+    float rsi = ta.rsi(close, 14)
+    float limaAtr = ta.atr(14)
+    bool ny = not na(time(timeframe.period, sessA, tz))
+    int sig = ny and close <= mid - dev and rsi <= 30 ? 1 : ny and close >= mid + dev and rsi >= 70 ? -1 : 0
+    [sig[1], limaAtr[1]]
+
+f_marcusCore(int pivotLen) =>
+    float coreAtr = ta.atr(14)
+    bool ny = not na(time(timeframe.period, sessA, tz))
+    bool nyStart = ny and not ny[1]
+    bool nmNY = not na(time(timeframe.period, nmNYSess, NM_TZ))
+    bool nmAsia = not na(time(timeframe.period, nmAsiaSess, NM_TZ))
+    var float pv = 0.0
+    var float vol = 0.0
+    if nyStart
+        pv := 0.0
+        vol := 0.0
+    if ny
+        float v = nz(volume, 1.0)
+        pv += ((high + low + close) / 3.0) * v
+        vol += v
+    float vwap = vol > 0 ? pv / vol : na
+
+    // Confirmed swing as backtested: strictly above the left bars, at least equal
+    // to the right bars, known once pivotLen candles have closed to its right.
+    bool isPH = bar_index >= 2 * pivotLen
+    bool isPL = bar_index >= 2 * pivotLen
+    if bar_index >= 2 * pivotLen
+        for b = 1 to pivotLen
+            if high[pivotLen + b] >= high[pivotLen] or high[pivotLen - b] > high[pivotLen]
+                isPH := false
+            if low[pivotLen + b] <= low[pivotLen] or low[pivotLen - b] < low[pivotLen]
+                isPL := false
+    float priorBearHigh = ta.valuewhen(close < open, high, 0)[1]
+    float priorBearLow = ta.valuewhen(close < open, low, 0)[1]
+    float priorBullHigh = ta.valuewhen(close > open, high, 0)[1]
+    float priorBullLow = ta.valuewhen(close > open, low, 0)[1]
+    var float coreSwingHigh = na
+    var float coreSwingLow = na
+    var bool highBroken = true
+    var bool lowBroken = true
+    var int coreBias = 0
+    var float obTop = na
+    var float obBottom = na
+    var int obDir = 0
+    if isPH
+        coreSwingHigh := high[pivotLen]
+        highBroken := false
+    if isPL
+        coreSwingLow := low[pivotLen]
+        lowBroken := false
+    bool coreBullBreak = not na(coreSwingHigh) and not highBroken and close > coreSwingHigh
+    bool coreBearBreak = not coreBullBreak and not na(coreSwingLow) and not lowBroken and close < coreSwingLow
+    if coreBullBreak
+        if not na(priorBearHigh) and not na(priorBearLow)
+            obTop := priorBearHigh
+            obBottom := priorBearLow
+            obDir := 1
+        coreBias := 1
+        highBroken := true
+    else if coreBearBreak
+        if not na(priorBullHigh) and not na(priorBullLow)
+            obTop := priorBullHigh
+            obBottom := priorBullLow
+            obDir := -1
+        coreBias := -1
+        lowBroken := true
+    bool obOverlap = not na(obTop) and high >= obBottom and low <= obTop
+
+    // FVG / IFVG retests exactly as backtested: every completed candle updates every
+    // zone (in or out of session) and a zone is spent on its first retest, whether or
+    // not the order-block / structure / VWAP / session filters then accept it.
+    var float[] zTop = array.new_float()
+    var float[] zBottom = array.new_float()
+    var int[] zDir = array.new_int()
+    var bool[] zFlipped = array.new_bool()
+    var int[] zFlipBar = array.new_int()
+    int fvgSig = 0
+    int fvgKind = 0
+    if array.size(zTop) > 0
+        for i = array.size(zTop) - 1 to 0
+            float top = array.get(zTop, i)
+            float bottom = array.get(zBottom, i)
+            int dir = array.get(zDir, i)
+            bool overlapsGap = high >= bottom and low <= top
+            if not array.get(zFlipped, i)
+                bool broken = dir > 0 ? close < bottom : close > top
+                if broken
+                    array.set(zFlipped, i, true)
+                    array.set(zFlipBar, i, bar_index)
+                    continue
+                if overlapsGap
+                    fvgSig := dir
+                    fvgKind := 1
+            else if bar_index > array.get(zFlipBar, i) and overlapsGap
+                fvgSig := -dir
+                fvgKind := 2
+            if fvgSig != 0
+                array.remove(zTop, i)
+                array.remove(zBottom, i)
+                array.remove(zDir, i)
+                array.remove(zFlipped, i)
+                array.remove(zFlipBar, i)
+                break
+    if bar_index >= 2
+        if low > high[2]
+            array.push(zTop, low)
+            array.push(zBottom, high[2])
+            array.push(zDir, 1)
+            array.push(zFlipped, false)
+            array.push(zFlipBar, -1)
+        if high < low[2]
+            array.push(zTop, low[2])
+            array.push(zBottom, high)
+            array.push(zDir, -1)
+            array.push(zFlipped, false)
+            array.push(zFlipBar, -1)
+    while array.size(zTop) > 300
+        array.shift(zTop)
+        array.shift(zBottom)
+        array.shift(zDir)
+        array.shift(zFlipped)
+        array.shift(zFlipBar)
+
+    bool obOk = fvgSig != 0 and fvgSig == obDir and obOverlap
+    // Marcus: NY session + NY VWAP side. Alpha/Mike/Tango: order block only.
+    // Sierra: retest in the direction of the latest BOS/CHoCH.
+    int sig = obOk and ny and (fvgSig > 0 ? close > vwap : close < vwap) ? fvgSig : 0
+    int kind = sig != 0 ? fvgKind : 0
+    int obAsia = obOk and nmAsia ? fvgSig : 0
+    int obNY = obOk and nmNY ? fvgSig : 0
+    int structAsia = fvgSig != 0 and fvgSig == coreBias and nmAsia ? fvgSig : 0
+    [sig[1], coreAtr[1], kind[1], obAsia[1], obNY[1], structAsia[1], time[1]]
+
+[limaMtfSignal, limaMtfAtr] = request.security(syminfo.tickerid, "5", f_limaCore(), lookahead=barmerge.lookahead_on)
+[marcus15MtfSignal, marcus15MtfAtr, marcus15MtfKind, nm15ObAsia, nm15ObNY, nm15StructAsia, nm15Time] = request.security(syminfo.tickerid, "15", f_marcusCore(playPivotLen), lookahead=barmerge.lookahead_on)
+[marcus30MtfSignal, marcus30MtfAtr, marcus30MtfKind, nm30ObAsia, nm30ObNY, nm30StructAsia, nm30Time] = request.security(syminfo.tickerid, "30", f_marcusCore(playPivotLen), lookahead=barmerge.lookahead_on)
+
+int levelFade = input.int(20, "SL/TP and label transparency", minval=0, maxval=70, group=G_PLAY)
+
+// Session VWAP is accumulated from the first bar of the NY session.
+bool playNY = not na(time(timeframe.period, sessA, tz))
+bool playNYStart = playNY and not playNY[1]
+var float playPV = 0.0
+var float playVol = 0.0
+if playNYStart
+    playPV := 0.0
+    playVol := 0.0
+if playNY
+    float playVolume = nz(volume, 1.0)
+    float playTypical = (high + low + close) / 3.0
+    playPV += playTypical * playVolume
+    playVol += playVolume
+float playVWAP = playVol > 0 ? playPV / playVol : na
+
+// Lima backtest rule: 20-period SMA ± 2 standard deviations, RSI(14).
+float playBBMid = ta.sma(close, 20)
+float playBBDev = 2.0 * ta.stdev(close, 20)
+float playBBUpper = playBBMid + playBBDev
+float playBBLower = playBBMid - playBBDev
+float playRSI = ta.rsi(close, 14)
+float playATR = ta.atr(14)
+bool limaLongSetup = isLima and timeframeMatches and playNY and close <= playBBLower and playRSI <= 30
+bool limaShortSetup = isLima and timeframeMatches and playNY and close >= playBBUpper and playRSI >= 70
+
+// Marcus structure: 2-left / 2-right confirmed swing by default, then a close
+// through the most recent unbroken swing. The OB is the latest opposite candle
+// before the break. It only becomes active once the break candle closes.
+float playPivotHigh = ta.pivothigh(high, playPivotLen, playPivotLen)
+float playPivotLow = ta.pivotlow(low, playPivotLen, playPivotLen)
+float playPriorLastBearHigh = ta.valuewhen(close < open, high, 0)[1]
+float playPriorLastBearLow = ta.valuewhen(close < open, low, 0)[1]
+float playPriorLastBullHigh = ta.valuewhen(close > open, high, 0)[1]
+float playPriorLastBullLow = ta.valuewhen(close > open, low, 0)[1]
+var float playSwingHigh = na
+var float playSwingLow = na
+var bool playHighBroken = true
+var bool playLowBroken = true
+var int playStructureBias = 0
+var string playStructureName = ""
+var float playOBTop = na
+var float playOBBottom = na
+var int playOBDir = 0
+bool playBullBreak = false
+bool playBearBreak = false
+if barstate.isconfirmed and isMarcus and timeframeMatches
+    if not na(playPivotHigh)
+        playSwingHigh := playPivotHigh
+        playHighBroken := false
+    if not na(playPivotLow)
+        playSwingLow := playPivotLow
+        playLowBroken := false
+    playBullBreak := not na(playSwingHigh) and not playHighBroken and close > playSwingHigh
+    playBearBreak := not na(playSwingLow) and not playLowBroken and close < playSwingLow
+    if playBullBreak
+        if not na(playPriorLastBearHigh) and not na(playPriorLastBearLow)
+            playOBTop := playPriorLastBearHigh
+            playOBBottom := playPriorLastBearLow
+            playOBDir := 1
+        playStructureName := playStructureBias < 0 ? "CHOCH" : "BOS"
+        playStructureBias := 1
+        playHighBroken := true
+        label.new(bar_index, high, "Confirmed bullish " + playStructureName,
+             style=label.style_label_down, color=color.new(softBull, 15), textcolor=color.white, size=size.tiny)
+    else if playBearBreak
+        if not na(playPriorLastBullHigh) and not na(playPriorLastBullLow)
+            playOBTop := playPriorLastBullHigh
+            playOBBottom := playPriorLastBullLow
+            playOBDir := -1
+        playStructureName := playStructureBias > 0 ? "CHOCH" : "BOS"
+        playStructureBias := -1
+        playLowBroken := true
+        label.new(bar_index, low, "Confirmed bearish " + playStructureName,
+             style=label.style_label_up, color=color.new(softBear, 15), textcolor=color.white, size=size.tiny)
+
+// Plot the active playbook order block from its confirmation bar forward.
+var box playOBBox = na
+var int playOBBoxDir = 0
+if barstate.isconfirmed and isMarcus and timeframeMatches and (playBullBreak or playBearBreak) and not na(playOBTop) and not na(playOBBottom)
+    if not na(playOBBox)
+        box.delete(playOBBox)
+    playOBBoxDir := playOBDir
+    playOBBox := box.new(bar_index, playOBTop, bar_index + 30, playOBBottom,
+         bgcolor=color.new(playOBDir > 0 ? softBull : softBear, 90),
+         border_color=playOBDir > 0 ? softBull : softBear,
+         text=playOBDir > 0 ? "Bull OB (confirmed)" : "Bear OB (confirmed)",
+         text_color=panelInk, text_size=size.tiny)
+if isMarcus and not na(playOBBox)
+    box.set_right(playOBBox, bar_index + 30)
+    bool obInvalidated = playOBBoxDir > 0 ? close < playOBBottom : close > playOBTop
+    if barstate.isconfirmed and obInvalidated
+        box.delete(playOBBox)
+        playOBBox := na
+
+// Completed FVG zones are added after the current bar has been checked for a
+// retest, matching the backtest's three-candle, close-confirmed definition.
+var float[] playGapTop = array.new_float()
+var float[] playGapBottom = array.new_float()
+var int[] playGapDir = array.new_int()
+var bool[] playGapFlipped = array.new_bool()
+var int[] playGapFlipBar = array.new_int()
+var bool[] playGapUsed = array.new_bool()
+bool marcusLongSetup = false
+bool marcusShortSetup = false
+string marcusSignalKind = ""
+if barstate.isconfirmed and isMarcus and timeframeMatches and playNY
+    marcusLongSetup := false
+    marcusShortSetup := false
+    marcusSignalKind := ""
+    if array.size(playGapTop) > 0
+        for i = array.size(playGapTop) - 1 to 0
+            if not array.get(playGapUsed, i)
+                float zoneTop = array.get(playGapTop, i)
+                float zoneBottom = array.get(playGapBottom, i)
+                int zoneDir = array.get(playGapDir, i)
+                bool flipped = array.get(playGapFlipped, i)
+                bool obOverlap = not na(playOBTop) and high >= playOBBottom and low <= playOBTop
+                bool gapOverlap = high >= zoneBottom and low <= zoneTop
+                if not flipped
+                    bool broken = zoneDir > 0 ? close < zoneBottom : close > zoneTop
+                    if broken
+                        array.set(playGapFlipped, i, true)
+                        array.set(playGapFlipBar, i, bar_index)
+                    else if gapOverlap and obOverlap and zoneDir == playOBDir
+                        if zoneDir > 0 and close > playVWAP
+                            marcusLongSetup := true
+                            marcusSignalKind := "FVG"
+                            array.set(playGapUsed, i, true)
+                            break
+                        else if zoneDir < 0 and close < playVWAP
+                            marcusShortSetup := true
+                            marcusSignalKind := "FVG"
+                            array.set(playGapUsed, i, true)
+                            break
+                else if bar_index > array.get(playGapFlipBar, i) and gapOverlap and obOverlap and -zoneDir == playOBDir
+                    if zoneDir < 0 and close > playVWAP
+                        marcusLongSetup := true
+                        marcusSignalKind := "IFVG"
+                        array.set(playGapUsed, i, true)
+                        break
+                    else if zoneDir > 0 and close < playVWAP
+                        marcusShortSetup := true
+                        marcusSignalKind := "IFVG"
+                        array.set(playGapUsed, i, true)
+                        break
+    if bar_index >= 2
+        if low > high[2]
+            array.push(playGapTop, low)
+            array.push(playGapBottom, high[2])
+            array.push(playGapDir, 1)
+            array.push(playGapFlipped, false)
+            array.push(playGapFlipBar, -1)
+            array.push(playGapUsed, false)
+        else if high < low[2]
+            array.push(playGapTop, low[2])
+            array.push(playGapBottom, high)
+            array.push(playGapDir, -1)
+            array.push(playGapFlipped, false)
+            array.push(playGapFlipBar, -1)
+            array.push(playGapUsed, false)
+    while array.size(playGapTop) > playMaxZones
+        array.shift(playGapTop)
+        array.shift(playGapBottom)
+        array.shift(playGapDir)
+        array.shift(playGapFlipped)
+        array.shift(playGapFlipBar)
+        array.shift(playGapUsed)
+
+bool playLongSetup = limaLongSetup or marcusLongSetup
+bool playShortSetup = limaShortSetup or marcusShortSetup
+if barstate.isconfirmed and limaLongSetup
+    label.new(bar_index + playLabelOffset, low, "LIMA LONG setup • not entry",
+         style=label.style_label_left, color=color.new(softBull, levelFade), textcolor=color.white, size=size.small)
+if barstate.isconfirmed and limaShortSetup
+    label.new(bar_index + playLabelOffset, high, "LIMA SHORT setup • not entry",
+         style=label.style_label_left, color=color.new(softBear, levelFade), textcolor=color.white, size=size.small)
+if barstate.isconfirmed and marcusLongSetup
+    label.new(bar_index + playLabelOffset, low, "MARCUS " + (isMarcus15 ? "15" : "30") + " LONG setup • not entry",
+         style=label.style_label_left, color=color.new(softBull, levelFade), textcolor=color.white, size=size.small)
+if barstate.isconfirmed and marcusShortSetup
+    label.new(bar_index + playLabelOffset, high, "MARCUS " + (isMarcus15 ? "15" : "30") + " SHORT setup • not entry",
+         style=label.style_label_left, color=color.new(softBear, levelFade), textcolor=color.white, size=size.small)
+
+// Entry is the next chart bar's open. Stops use the setup bar's ATR(14).
+var int playPosition = 0
+var int playEntryBar = na
+var float playEntry = na
+var float playStop = na
+var float playTarget = na
+var float playEntryRisk = na
+var int playClosedTrades = 0
+var int playWinningTrades = 0
+var float playNetProfit = 0.0
+var line playEntryLine = na
+var line playStopLine = na
+var line playTargetLine = na
+bool playEnterLong = false
+bool playEnterShort = false
+float activeRR = isLima ? limaRR : isMarcus15 ? marcus15RR : marcus30RR
+bool selectedModelHasMtf = (isLima and showMtfLima) or (isMarcus15 and showMtfMarcus15) or (isMarcus30 and showMtfMarcus30)
+if barstate.isnew and timeframeMatches and playbook != "Off" and not selectedModelHasMtf and playPosition == 0
+    if playLongSetup[1]
+        playPosition := 1
+        playEntry := open
+        playEntryRisk := math.max(nz(playATR[1]) * playStopATR, syminfo.mintick)
+        playStop := playEntry - playEntryRisk
+        playTarget := playEntry + playEntryRisk * activeRR
+        playEntryBar := bar_index
+        playEnterLong := true
+    else if playShortSetup[1]
+        playPosition := -1
+        playEntry := open
+        playEntryRisk := math.max(nz(playATR[1]) * playStopATR, syminfo.mintick)
+        playStop := playEntry + playEntryRisk
+        playTarget := playEntry - playEntryRisk * activeRR
+        playEntryBar := bar_index
+        playEnterShort := true
+    if playEnterLong or playEnterShort
+        if not na(playEntryLine)
+            line.delete(playEntryLine)
+        if not na(playStopLine)
+            line.delete(playStopLine)
+        if not na(playTargetLine)
+            line.delete(playTargetLine)
+        playEntryLine := line.new(bar_index, playEntry, bar_index + levelLineBars, playEntry, color=softBlue, width=3)
+        playStopLine := line.new(bar_index, playStop, bar_index + levelLineBars, playStop, color=color.new(softBear, levelFade), width=3, style=line.style_solid)
+        playTargetLine := line.new(bar_index, playTarget, bar_index + levelLineBars, playTarget, color=color.new(softBull, levelFade), width=3, style=line.style_solid)
+        label.new(bar_index + playLabelOffset, playEntry, (playEnterLong ? "LONG" : "SHORT") + " • entry",
+             style=label.style_label_left, color=color.new(softBlue, levelFade), textcolor=color.white, size=size.small)
+
+if playPosition != 0 and not na(playEntryBar)
+    bool playStopHit = playPosition > 0 ? low <= playStop : high >= playStop
+    bool playTargetHit = playPosition > 0 ? high >= playTarget : low <= playTarget
+    if barstate.isconfirmed and bar_index >= playEntryBar and (playStopHit or playTargetHit)
+        bool stoppedFirst = playStopHit
+        float exitAt = stoppedFirst ? playStop : playTarget
+        float direction = playPosition > 0 ? 1.0 : -1.0
+        float grossPnL = (exitAt - playEntry) * direction * syminfo.pointvalue * playContracts
+        float costs = (playSlipTicks * syminfo.mintick * syminfo.pointvalue * playContracts * 2.0) + (playCommission * playContracts * 2.0)
+        float tradeNetPnL = grossPnL - costs
+        playClosedTrades += 1
+        playWinningTrades += tradeNetPnL > 0 ? 1 : 0
+        playNetProfit += tradeNetPnL
+        label.new(bar_index + playLabelOffset, exitAt, (stoppedFirst ? "STOP" : "TARGET " + str.tostring(activeRR, "#.##") + "R") + "  " + (tradeNetPnL >= 0 ? "+$" : "-$") + str.tostring(math.abs(tradeNetPnL), "#.00"),
+             style=label.style_label_left, color=stoppedFirst ? color.new(softBear, levelFade) : color.new(softBull, levelFade), textcolor=color.white, size=size.small)
+        line.set_x2(playEntryLine, bar_index)
+        line.set_x2(playStopLine, bar_index)
+        line.set_x2(playTargetLine, bar_index)
+        playPosition := 0
+        playEntryBar := na
+        playEntry := na
+        playStop := na
+        playTarget := na
+        playEntryRisk := na
+
+plot(isLima ? playBBUpper : na, "Lima upper Bollinger", color=color.new(softNeutral, 5))
+plot(isLima ? playBBMid : na, "Lima BB midline", color=color.new(color.gray, 35))
+plot(isLima ? playBBLower : na, "Lima lower Bollinger", color=color.new(softNeutral, 5))
+plot(isMarcus ? playVWAP : na, "Marcus New York VWAP", color=color.new(softGold, 0), linewidth=2)
+plot(isLima ? playRSI : na, "Lima RSI (data window)", display=display.data_window)
+plot(isLima ? playBBLower : na, "Lima lower BB (data window)", display=display.data_window)
+
+// Bias per timeframe from the last COMPLETED candle (no repainting): close above a rising
+// stack (close > EMA20 > EMA50) = bullish, below a falling stack = bearish, otherwise neutral.
+f_trendData(string tf) => request.security(syminfo.tickerid, tf, [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1]], lookahead=barmerge.lookahead_on)
+f_trendText(float c, float e20, float e50) =>
+    string state = "Neutral"
+    if na(c) or na(e20)
+        state := "Loading"
+    else if na(e50)
+        state := c > e20 ? "Bullish" : c < e20 ? "Bearish" : "Neutral"
+    else if c > e20 and e20 > e50
+        state := "Bullish"
+    else if c < e20 and e20 < e50
+        state := "Bearish"
+    state
+
+[trend5Close, trend5E20, trend5E50] = f_trendData("5")
+[trend15Close, trend15E20, trend15E50] = f_trendData("15")
+[trend1hClose, trend1hE20, trend1hE50] = f_trendData("60")
+[trend4hClose, trend4hE20, trend4hE50] = f_trendData("240")
+[trendDayClose, trendDayE20, trendDayE50] = f_trendData("D")
+[trendWeekClose, trendWeekE20, trendWeekE50] = f_trendData("W")
+var table biasCard = table.new(position.bottom_left, 7, 2, bgcolor=#131722, frame_color=#363A45, frame_width=1, border_color=#20242E, border_width=1)
+f_biasCell(int col, string tfName, string state) =>
+    color bg = state == "Bullish" ? #1E8C73 : state == "Bearish" ? #C2403D : #363A45
+    string txt = state == "Bullish" ? "▲ BULL" : state == "Bearish" ? "▼ BEAR" : state == "Loading" ? "…" : "■ NEUTRAL"
+    table.cell(biasCard, col, 0, tfName, text_color=#D1D4DC, bgcolor=#2A2E39, text_size=size.small)
+    table.cell(biasCard, col, 1, txt, text_color=color.white, bgcolor=bg, text_size=size.small)
+if barstate.islast and biasShow
+    table.cell(biasCard, 0, 0, "BIAS", text_color=#D1D4DC, bgcolor=#2A2E39, text_size=size.small)
+    table.cell(biasCard, 0, 1, "last closed", text_color=#6A6D78, bgcolor=#131722, text_size=size.tiny)
+    f_biasCell(1, "5m", f_trendText(trend5Close, trend5E20, trend5E50))
+    f_biasCell(2, "15m", f_trendText(trend15Close, trend15E20, trend15E50))
+    f_biasCell(3, "1H", f_trendText(trend1hClose, trend1hE20, trend1hE50))
+    f_biasCell(4, "4H", f_trendText(trend4hClose, trend4hE20, trend4hE50))
+    f_biasCell(5, "D", f_trendText(trendDayClose, trendDayE20, trendDayE50))
+    f_biasCell(6, "W", f_trendText(trendWeekClose, trendWeekE20, trendWeekE50))
+else if barstate.islast
+    table.clear(biasCard, 0, 0, 6, 1)
+
+alertcondition(playLongSetup, "Lima / Marcus bullish setup", "Confirmed bullish playbook setup; indicator marks entry on next bar open")
+alertcondition(playShortSetup, "Lima / Marcus bearish setup", "Confirmed bearish playbook setup; indicator marks entry on next bar open")
+
+//──────────────────────────────────────────────────────────────────────────────
+// NEW MODELS • Gold: GOLF, HOTEL, ALPHA, KILO • Nasdaq: MIKE, TANGO, SIERRA, VICTOR
+// Ported from validate.py / nq_backtest.py: signal on the completed candle, entry at
+// the next open + slippage, stop = 1 ATR(14) of the signal timeframe, stop wins when
+// both levels print in one bar, exit on the model's opposite signal at the next
+// open, flat at 16:00 ET (NY) / 03:00 ET (Asia). One position per model. Gold models
+// trade only on MGC/GC charts, Nasdaq models only on MNQ/NQ. Use a 5m or 1m chart.
+//──────────────────────────────────────────────────────────────────────────────
+
+// The backtest's 5/15/30 FVG state: buckets of 5m bars that START in (L-tf, L], a gap
+// against the bucket two back, published one bucket late (matches indicators()).
+f_nmBucket(int P) =>
+    var float state = na
+    var float pub = na
+    var int curLab = na
+    var float curHi = na
+    var float curLo = na
+    var float b1Hi = na
+    var float b1Lo = na
+    var float b2Hi = na
+    var float b2Lo = na
+    int lab = time % P == 0 ? time : time - time % P + P
+    if not na(curLab) and curLab != lab
+        pub := state
+        if not na(b2Hi)
+            state := curLo > b2Hi ? 1.0 : curHi < b2Lo ? -1.0 : state
+        b2Hi := b1Hi
+        b2Lo := b1Lo
+        b1Hi := curHi
+        b1Lo := curLo
+        curLab := na
+    curHi := na(curLab) ? high : math.max(curHi, high)
+    curLo := na(curLab) ? low : math.min(curLo, low)
+    curLab := lab
+    if time == lab
+        pub := state
+        if not na(b2Hi)
+            state := curLo > b2Hi ? 1.0 : curHi < b2Lo ? -1.0 : state
+        b2Hi := b1Hi
+        b2Lo := b1Lo
+        b1Hi := curHi
+        b1Lo := curLo
+        curLab := na
+    pub
+
+// 5m engine: Hotel / Kilo (BB + RSI), Victor (FVG alignment + day VWAP), and the
+// 09:30-09:45 ET opening range Golf trades from.
+// Fixed-range volume profile of the last completed NY cash session (09:30-16:00 ET), built
+// exactly as the backtest: each 5m bar's volume spread evenly over the price bins it covers,
+// POC = busiest bin, value area grown from the POC toward the busier neighbour until vaPct.
+f_nmVP(float binSize, float vaPct) =>
+    int vMin = hour(time, NM_TZ) * 60 + minute(time, NM_TZ)
+    bool rth = vMin >= 570 and vMin < 960
+    var array<float> hist = array.new_float()
+    var int binLo = na
+    var bool building = false
+    var float poc = na
+    var float vah = na
+    var float val = na
+    if rth and not rth[1]
+        array.clear(hist)
+        binLo := na
+        building := true
+    if rth and building
+        int a = int(math.floor(low / binSize))
+        int b = int(math.ceil(high / binSize))
+        if na(binLo)
+            binLo := a
+        while a < binLo
+            array.unshift(hist, 0.0)
+            binLo -= 1
+        while b - binLo >= array.size(hist)
+            array.push(hist, 0.0)
+        float share = nz(volume) / (b - a + 1)
+        for k = a - binLo to b - binLo
+            array.set(hist, k, array.get(hist, k) + share)
+    if not rth and building
+        building := false
+        float total = array.sum(hist)
+        if total > 0
+            int p = array.indexof(hist, array.max(hist))
+            int i = p
+            int j = p
+            float acc = array.get(hist, p)
+            int n = array.size(hist)
+            while acc < vaPct * total and (i > 0 or j < n - 1)
+                float up = j < n - 1 ? array.get(hist, j + 1) : -1.0
+                float dn = i > 0 ? array.get(hist, i - 1) : -1.0
+                if up >= dn
+                    j += 1
+                    acc += up
+                else
+                    i -= 1
+                    acc += dn
+            poc := (binLo + p) * binSize
+            vah := (binLo + j) * binSize
+            val := (binLo + i) * binSize
+    [poc, vah, val]
+
+f_nm5() =>
+    float mid = ta.sma(close, 20)
+    float sd = ta.stdev(close, 20)
+    float rsi = ta.rsi(close, 14)
+    float atr5 = ta.atr(14)
+    float f5 = f_nmBucket(300000)
+    float f15 = f_nmBucket(900000)
+    float f30 = f_nmBucket(1800000)
+    bool inNY = not na(time(timeframe.period, nmNYSess, NM_TZ))
+    bool inAsia = not na(time(timeframe.period, nmAsiaSess, NM_TZ))
+    int lima = close <= mid - nmLimaBB * sd and rsi <= nmLimaRSI ? 1 : close >= mid + nmLimaBB * sd and rsi >= 100.0 - nmLimaRSI ? -1 : 0
+    // Chicago calendar-day VWAP, the filter the backtest's fvg_vwap variant used.
+    int ctDay = dayofmonth(time, "America/Chicago")
+    var float dPV = 0.0
+    var float dV = 0.0
+    if ctDay != nz(ctDay[1], -1)
+        dPV := 0.0
+        dV := 0.0
+    float v = nz(volume, 1.0)
+    dPV += (high + low + close) / 3.0 * v
+    dV += v
+    float dayVwap = dV > 0 ? dPV / dV : na
+    int victor = inAsia and f5 == 1 and f15 == 1 and f30 == 1 and close > dayVwap ? 1 : inAsia and f5 == -1 and f15 == -1 and f30 == -1 and close < dayVwap ? -1 : 0
+    int nyMin = hour(time, NM_TZ) * 60 + minute(time, NM_TZ)
+    int nyKey = year(time, NM_TZ) * 10000 + month(time, NM_TZ) * 100 + dayofmonth(time, NM_TZ)
+    var float orHi = na
+    var float orLo = na
+    var int orKey = na
+    if nyMin >= 570 and nyMin < 585
+        bool fresh = na(orKey) or orKey != nyKey
+        orHi := fresh ? high : math.max(orHi, high)
+        orLo := fresh ? low : math.min(orLo, low)
+        orKey := nyKey
+    // Confidence-score dimensions, long-oriented in [-1, 1] (same rules as the study)
+    float ema20 = ta.ema(close, 20)
+    float ema50 = ta.ema(close, 50)
+    float lo20 = ta.lowest(low[4], 20)
+    float hi20 = ta.highest(high[4], 20)
+    bool sweptLo = ta.lowest(low, 3) < lo20 and close > lo20
+    bool sweptHi = ta.highest(high, 3) > hi20 and close < hi20
+    float sStruct = math.max(-1.0, math.min(1.0, math.sign(ema20 - ema50) + (sweptLo ? 1.0 : 0.0) - (sweptHi ? 1.0 : 0.0)))
+    [diPlus, diMinus, adx] = ta.dmi(14, 14)
+    float adxDir = adx > 20 ? math.sign(diPlus - diMinus) : 0.0
+    float sMom = (math.sign(rsi - rsi[3]) + adxDir) / 2.0
+    float relVol = volume / ta.sma(volume, 20)
+    float sVol = relVol >= 1.3 ? 1.0 : relVol <= 0.7 ? -1.0 : 0.0
+    bool squeeze = mid + 2.0 * sd < mid + 1.5 * atr5 and mid - 2.0 * sd > mid - 1.5 * atr5
+    float sqv = squeeze ? 1.0 : 0.0
+    bool released = ta.highest(sqv[1], 6) > 0 and not squeeze
+    float sVolat = released ? math.sign(close - mid) : 0.0
+    float body = math.abs(close - open)
+    float rng = high - low
+    bool bullEng = close > open and open[1] > close[1] and close >= open[1] and open <= close[1]
+    bool bearEng = close < open and open[1] < close[1] and close <= open[1] and open >= close[1]
+    bool hammer = rng > 0 and math.min(open, close) - low >= 2 * body and (close - low) / rng >= 2.0 / 3.0
+    bool star = rng > 0 and high - math.max(open, close) >= 2 * body and (high - close) / rng >= 2.0 / 3.0
+    float locv = rng > 0 ? (close - low) / rng : 0.5
+    float sPat = bullEng or hammer ? 1.0 : bearEng or star ? -1.0 : locv >= 2.0 / 3.0 ? 0.5 : locv <= 1.0 / 3.0 ? -0.5 : 0.0
+    float dirSum = sStruct + sMom + sVolat + sPat
+    [vpPoc, vpVah, vpVal] = f_nmVP(nmIsGold ? 0.5 : 2.0, nmEchoVA)
+    int echo = inAsia and low <= vpVal and close > vpVal and open > vpVal ? 1 : inAsia and high >= vpVah and close < vpVah and open < vpVah ? -1 : 0
+    int hotel = inNY ? lima : 0
+    int kilo = inAsia ? lima : 0
+    [hotel[1], kilo[1], victor[1], atr5[1], time[1], orHi[1], orLo[1], orKey[1], dirSum[1], sVol[1], echo[1], vpPoc[1], vpVah[1], vpVal[1]]
+
+[nm5Hotel, nm5Kilo, nm5Victor, nm5Atr, nm5Time, nmOrHi, nmOrLo, nmOrKey, nm5Dir, nm5Vol, nm5Echo, nmVpPoc, nmVpVah, nmVpVal] = request.security(syminfo.tickerid, "5", f_nm5(), lookahead=barmerge.lookahead_on)
+[nm10Close, nm10High, nm10Low, nm10Atr, nm10Time] = request.security(syminfo.tickerid, "10", [close[1], high[1], low[1], ta.atr(14)[1], time[1]], lookahead=barmerge.lookahead_on)
+bool nmNew5 = timeframe.change("5")
+bool nmNew10 = timeframe.change("10")
+bool nmNew15 = timeframe.change("15")
+bool nmNew30 = timeframe.change("30")
+
+// GOLF: 15m opening range from 5m bars, judged on completed 10m candles from 09:50.
+// Arms on the first close outside, fires when a later candle wicks back to the
+// range edge and closes outside again; expires after 3 candles or an opposite close.
+var int golfDay = na
+var int golfPending = 0
+var int golfPendIdx = na
+var int golfCandIdx = 0
+var bool golfDone = false
+int golfSig = 0
+if nmNew10 and not na(nm10Time)
+    int gKey = year(nm10Time, NM_TZ) * 10000 + month(nm10Time, NM_TZ) * 100 + dayofmonth(nm10Time, NM_TZ)
+    int gMin = hour(nm10Time, NM_TZ) * 60 + minute(nm10Time, NM_TZ)
+    if na(golfDay) or gKey != golfDay
+        golfDay := gKey
+        golfPending := 0
+        golfPendIdx := na
+        golfCandIdx := 0
+        golfDone := false
+    bool gCand = gMin >= 585 and gMin + 10 < 960 and nmOrKey == gKey and nmOrHi > nmOrLo
+    if gCand and not golfDone
+        int outside = nm10Close > nmOrHi ? 1 : nm10Close < nmOrLo ? -1 : 0
+        if golfPending == 0 and outside != 0
+            golfPending := outside
+            golfPendIdx := golfCandIdx
+        else if golfPending != 0 and golfCandIdx > golfPendIdx
+            bool touched = golfPending > 0 ? (nm10Low <= nmOrHi and nm10Close > nmOrHi) : (nm10High >= nmOrLo and nm10Close < nmOrLo)
+            if touched
+                golfSig := golfPending
+                golfDone := true
+            else if outside != 0 and outside != golfPending
+                golfPending := 0
+            else if golfCandIdx - golfPendIdx > 3
+                golfPending := 0
+        golfCandIdx += 1
+
+type NewModel
+    string tag
+    string desc
+    float rr
+    int tfMs
+    int execMs
+    int sess
+    bool gold
+    int pos = 0
+    float entry
+    float stop
+    float target
+    int entryBar
+    int entryExec
+    int exitExec = 0
+    int flatAt
+    int trades = 0
+    int wins = 0
+    float net = 0.0
+    float peak = 0.0
+    line eLine
+    line sLine
+    line tLine
+    label eTag
+    label sTag
+    label tTag
+    array<label> marks
+    bool inTotal = true
+
+// Combined closed-trade results of the eight new models on this chart.
+type NmTotal
+    int trades = 0
+    int wins = 0
+    float net = 0.0
+    float peak = 0.0
+
+var NmTotal nmTot = NmTotal.new()
+
+// Session end for a signal candle: 16:00 ET for NY, the next 03:00 ET for Asia.
+f_nmFlatAt(int sigTime, int sess) =>
+    int sameDay = timestamp(NM_TZ, year(sigTime, NM_TZ), month(sigTime, NM_TZ), dayofmonth(sigTime, NM_TZ), sess == 0 ? 16 : 3, 0)
+    sess == 1 and hour(sigTime, NM_TZ) >= 19 ? sameDay + 86400000 : sameDay
+
+f_nmMark(NewModel m, label lb) =>
+    if na(m.marks)
+        m.marks := array.new<label>()
+    array.push(m.marks, lb)
+    while array.size(m.marks) > nmKeepTrades * 2
+        label.delete(array.shift(m.marks))
+    lb
+
+f_nmClose(NewModel m, float rawExit, string why) =>
+    float fill = rawExit - m.pos * nmSlipTicks * syminfo.mintick
+    float pnl = (fill - m.entry) * m.pos * syminfo.pointvalue - 2.0 * nmCommission
+    m.trades := m.trades + 1
+    m.wins := m.wins + (pnl > 0 ? 1 : 0)
+    m.net := m.net + pnl
+    m.peak := math.max(m.peak, m.net)
+    m.exitExec := time - time % m.execMs
+    m.pos := 0
+    if m.inTotal
+        nmTot.trades := nmTot.trades + 1
+        nmTot.wins := nmTot.wins + (pnl > 0 ? 1 : 0)
+        nmTot.net := nmTot.net + pnl
+        nmTot.peak := math.max(nmTot.peak, nmTot.net)
+    if not na(m.eLine)
+        line.set_x2(m.eLine, bar_index)
+        line.set_x2(m.sLine, bar_index)
+        line.set_x2(m.tLine, bar_index)
+        label.set_text(m.eTag, label.get_text(m.eTag) + " • " + why)
+    f_nmMark(m, label.new(bar_index + mtfLabelOffset, rawExit, m.tag + " " + why + "  " + (pnl >= 0 ? "+$" : "-$") + str.tostring(math.abs(pnl), "#.00"), style=label.style_label_left, color=color.new(pnl >= 0 ? softBull : softBear, levelFade), textcolor=color.white, size=size.small))
+    pnl
+
+f_nmStep(NewModel m, bool enabled, bool evt, int raw, float sigAtr, int sigTime, int cutoff, float dirSum, float volScore) =>
+    bool marketOk = m.gold ? nmIsGold : nmIsNasdaq
+    // Backtest bar the signal sits on: HTF signals land on the candle's last 5m bar.
+    int sigPos = sigTime + m.tfMs - m.execMs
+    // Open-price exits: the model's own opposite signal, then the session clock.
+    if m.pos != 0 and evt and raw == -m.pos and sigPos >= m.entryExec
+        f_nmClose(m, open, "SIGNAL EXIT")
+    if m.pos != 0 and time >= m.flatAt
+        f_nmClose(m, open, "TIME EXIT")
+    // A signal from the candle that held the last exit is skipped, as in the backtest.
+    if m.pos == 0 and enabled and marketOk and evt and raw != 0 and time >= cutoff and sigPos > m.exitExec
+        int fa = f_nmFlatAt(sigTime, m.sess)
+        if time < fa
+            float risk = math.max(nz(sigAtr), syminfo.mintick)
+            m.pos := raw
+            m.entry := open + raw * nmSlipTicks * syminfo.mintick
+            m.stop := m.entry - raw * risk
+            m.target := m.entry + raw * risk * m.rr
+            m.entryBar := bar_index
+            m.entryExec := sigPos + m.execMs
+            m.flatAt := fa
+            float riskPer = (risk + 2 * nmSlipTicks * syminfo.mintick) * syminfo.pointvalue + 2.0 * nmCommission
+            int qty = math.floor(nmRiskBudget / riskPer)
+            float score = nmScoreWeekly ? 50.0 + 50.0 / 6.0 * (raw * nz(dirSum) + nz(volScore) + raw * nz(nmWeekDir)) : 50.0 + 10.0 * (raw * nz(dirSum) + nz(volScore))
+            string scoreTxt = "score " + str.tostring(math.round(score)) + "/100"
+            string qtyTxt = qty > 0 ? str.tostring(qty) + " contract(s), ~$" + str.tostring(qty * riskPer, "#") + " risk" : "1 contract = $" + str.tostring(riskPer, "#") + " risk (over budget)"
+            alert(m.tag + (raw > 0 ? " LONG " : " SHORT ") + syminfo.ticker + " @ " + str.tostring(m.entry, format.mintick) + " | SL " + str.tostring(m.stop, format.mintick) + " | TP " + str.tostring(m.target, format.mintick) + " (" + str.tostring(m.rr, "#.#") + "R) | " + qtyTxt + " | flat by " + (m.sess == 0 ? "16:00" : "03:00") + " ET | " + scoreTxt, alert.freq_once_per_bar)
+            if not na(m.eLine)
+                line.delete(m.eLine)
+                line.delete(m.sLine)
+                line.delete(m.tLine)
+                label.delete(m.eTag)
+                label.delete(m.sTag)
+                label.delete(m.tTag)
+            m.eLine := line.new(bar_index, m.entry, bar_index + levelLineBars, m.entry, color=softBlue, width=3)
+            m.sLine := line.new(bar_index, m.stop, bar_index + levelLineBars, m.stop, color=color.new(softBear, levelFade), width=3)
+            m.tLine := line.new(bar_index, m.target, bar_index + levelLineBars, m.target, color=color.new(softBull, levelFade), width=3)
+            m.eTag := label.new(bar_index + mtfLabelOffset, m.entry, m.tag + " • " + m.desc + (raw > 0 ? " • LONG" : " • SHORT") + " • ENTRY • " + qtyTxt + " • " + scoreTxt, style=label.style_label_left, color=color.new(panelCream, levelFade), textcolor=panelInk, size=size.small)
+            f_nmMark(m, label.new(bar_index, m.entry, m.tag + (raw > 0 ? " LONG ▲ " : " SHORT ▼ ") + str.tostring(m.entry, format.mintick), style=raw > 0 ? label.style_label_up : label.style_label_down, color=color.new(softBlue, 10), textcolor=color.white, size=size.small))
+            m.sTag := label.new(bar_index + mtfLabelOffset, m.stop, "STOP LOSS", style=label.style_label_left, color=color.new(softBear, levelFade), textcolor=color.white, size=size.small)
+            m.tTag := label.new(bar_index + mtfLabelOffset, m.target, "TAKE PROFIT " + str.tostring(m.rr, "#.##") + "R", style=label.style_label_left, color=color.new(softBull, levelFade), textcolor=color.white, size=size.small)
+    // Stop / target from the entry bar on; the stop fills at the open if price gaps past it.
+    if m.pos != 0 and barstate.isconfirmed and bar_index >= m.entryBar
+        bool stopHit = m.pos > 0 ? low <= m.stop : high >= m.stop
+        bool targetHit = m.pos > 0 ? high >= m.target : low <= m.target
+        if stopHit
+            f_nmClose(m, m.pos > 0 ? math.min(m.stop, open) : math.max(m.stop, open), "STOPPED")
+        else if targetHit
+            f_nmClose(m, m.target, "TARGET HIT")
+    if m.pos != 0 and barstate.isconfirmed
+        line.set_x2(m.eLine, bar_index + levelLineBars)
+        line.set_x2(m.sLine, bar_index + levelLineBars)
+        line.set_x2(m.tLine, bar_index + levelLineBars)
+    m.pos
+
+var NewModel nmGolf = NewModel.new("GOLF", "Gold NY 15m ORB retest", nmGolfRR, 600000, 600000, 0, true)
+var NewModel nmHotel = NewModel.new("HOTEL", "Gold NY BB+RSI", nmHotelRR, 300000, 300000, 0, true)
+var NewModel nmAlpha = NewModel.new("ALPHA", "Gold Asia 30m FVG+OB", nmAlphaRR, 1800000, 300000, 1, true)
+var NewModel nmKilo = NewModel.new("KILO", "Gold Asia BB+RSI", nmKiloRR, 300000, 300000, 1, true)
+var NewModel nmMike = NewModel.new("MIKE", "Nasdaq NY 30m FVG+OB", nmMikeRR, 1800000, 300000, 0, false)
+var NewModel nmTango = NewModel.new("TANGO", "Nasdaq Asia 15m FVG+OB", nmTangoRR, 900000, 300000, 1, false)
+var NewModel nmSierra = NewModel.new("SIERRA", "Nasdaq Asia 15m FVG+BOS", nmSierraRR, 900000, 300000, 1, false)
+var NewModel nmEcho = NewModel.new("ECHO", "Nasdaq Asia VP edge reject", nmEchoRR, 300000, 300000, 1, false)
+var NewModel nmVictor = NewModel.new("VICTOR", "Nasdaq Asia FVG 5/15/30+VWAP", nmVictorRR, 300000, 300000, 1, false)
+
+f_nmStep(nmGolf, nmGolfOn, nmNew10, golfSig, nm10Atr, nm10Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmHotel, nmHotelOn, nmNew5, nm5Hotel, nm5Atr, nm5Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmAlpha, nmAlphaOn, nmNew30, nm30ObAsia, marcus30MtfAtr, nm30Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmKilo, nmKiloOn, nmNew5, nm5Kilo, nm5Atr, nm5Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmMike, nmMikeOn, nmNew30, nm30ObNY, marcus30MtfAtr, nm30Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmTango, nmTangoOn, nmNew15, nm15ObAsia, marcus15MtfAtr, nm15Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmSierra, nmSierraOn, nmNew15, nm15StructAsia, marcus15MtfAtr, nm15Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmVictor, nmVictorOn, nmNew5, nm5Victor, nm5Atr, nm5Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmEcho, nmEchoOn, nmNew5, nm5Echo, nm5Atr, nm5Time, pnlCutoff, nm5Dir, nm5Vol)
+plot(nmShowVP ? nmVpPoc : na, "VP POC (prior NY session)", color=color.new(softGold, 0), style=plot.style_stepline, linewidth=2)
+plot(nmShowVP ? nmVpVah : na, "VP VAH (prior NY session)", color=color.new(softBlue, 15), style=plot.style_stepline)
+plot(nmShowVP ? nmVpVal : na, "VP VAL (prior NY session)", color=color.new(softBlue, 15), style=plot.style_stepline)
+
+// LIMA / MARCUS 15 / MARCUS 30 run on the same engine: flat 16:00 ET, opposite-signal
+// exit, entry-bar stop/target, drawdown stop. Signals and R inputs are unchanged.
+var NewModel nmLima = NewModel.new("LIMA 5m", "Nasdaq NY BB+RSI", limaRR, 300000, 300000, 0, false)
+var NewModel nmM15 = NewModel.new("MARCUS 15m", "NY FVG+OB+VWAP", marcus15RR, 900000, 300000, 0, false)
+var NewModel nmM30 = NewModel.new("MARCUS 30m", "NY FVG+OB+VWAP", marcus30RR, 1800000, 300000, 0, false)
+nmLima.inTotal := false
+nmM15.inTotal := false
+nmM30.inTotal := false
+nmM15.desc := "NY " + (marcus15MtfKind == 2 ? "IFVG" : "FVG") + "+OB+VWAP"
+nmM30.desc := "NY " + (marcus30MtfKind == 2 ? "IFVG" : "FVG") + "+OB+VWAP"
+f_nmStep(nmLima, showMtfLima, nmNew5, limaMtfSignal, limaMtfAtr, nm5Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmM15, showMtfMarcus15, nmNew15, marcus15MtfSignal, marcus15MtfAtr, nm15Time, pnlCutoff, nm5Dir, nm5Vol)
+f_nmStep(nmM30, showMtfMarcus30, nmNew30, marcus30MtfSignal, marcus30MtfAtr, nm30Time, pnlCutoff, nm5Dir, nm5Vol)
+bool limaMtfEvent = nmLima.entryBar == bar_index
+bool marcus15MtfEvent = nmM15.entryBar == bar_index
+bool marcus30MtfEvent = nmM30.entryBar == bar_index
+alertcondition(limaMtfEvent, "Lima 5m MTF setup", "Completed Lima 5m setup; levels are drawn from the next chart bar open")
+alertcondition(marcus15MtfEvent, "Marcus 15m MTF setup", "Completed Marcus 15m FVG/IFVG + OB + BOS/CHoCH setup")
+alertcondition(marcus30MtfEvent, "Marcus 30m MTF setup", "Completed Marcus 30m FVG/IFVG + OB + BOS/CHoCH setup")
+
+bool nmAnyEntry = nmGolf.entryBar == bar_index or nmHotel.entryBar == bar_index or nmAlpha.entryBar == bar_index or nmKilo.entryBar == bar_index or nmMike.entryBar == bar_index or nmTango.entryBar == bar_index or nmSierra.entryBar == bar_index or nmVictor.entryBar == bar_index or nmEcho.entryBar == bar_index
+alertcondition(nmAnyEntry, "New model entry (Golf/Hotel/Alpha/Kilo/Mike/Tango/Sierra/Victor/Echo)", "A new-model trade entered at this bar's open; check its entry, stop and target labels.")
+
+//──────────────────────────────────────────────────────────────────────────────
+// Selected seven-strategy basket. All signals are confirmed on their source
+// timeframe, then routed through one MNQ position so simultaneous signals do
+// not stack contracts. A same-time, same-direction cluster is one trade.
+//──────────────────────────────────────────────────────────────────────────────
+string G_BASKET = "Selected seven strategy basket"
+int bskSlipTicks = input.int(1, "Slippage (ticks per side)", minval=0, maxval=20, group=G_BASKET)
+float bskCommission = input.float(2.50, "Commission per MNQ contract per side ($)", minval=0, step=0.25, group=G_BASKET)
+bool bskOscarBreakOn = input.bool(true, "Oscar • 15m ORB breakout (10m execution)", group=G_BASKET)
+bool bskOscarFakeoutOn = input.bool(true, "Oscar • 15m ORB two-close filter (5m execution)", group=G_BASKET)
+bool bskOscarRetestOn = input.bool(true, "Oscar • 15m ORB retest (5m execution)", group=G_BASKET)
+float bskOscarBreakRR = input.float(3.0, "Oscar breakout target R", minval=0.5, step=0.5, group=G_BASKET)
+float bskOscarRetestRR = input.float(3.0, "Oscar retest target R", minval=0.5, step=0.5, group=G_BASKET)
+float bskOscarFakeRR = input.float(2.0, "Oscar fakeout target R", minval=0.5, step=0.5, group=G_BASKET)
+float bskStopATR = input.float(1.0, "ATR stop multiple (Oscar)", minval=0.25, step=0.25, group=G_BASKET)
+bool bskMNQCompatible = syminfo.root == "MNQ" or str.contains(str.upper(syminfo.ticker), "MNQ") or str.contains(str.upper(syminfo.tickerid), "MNQ") or (syminfo.type == "futures" and syminfo.pointvalue == 2.0)
+
+// 15-minute opening range, 10-minute execution. The range is built from
+// completed 5-minute intrabars so 09:45–09:50 is not accidentally included.
+f_bskOscarBreak10() =>
+    array<int> ltfTime = request.security_lower_tf(syminfo.tickerid, "5", time)
+    array<float> ltfHigh = request.security_lower_tf(syminfo.tickerid, "5", high)
+    array<float> ltfLow = request.security_lower_tf(syminfo.tickerid, "5", low)
+    bool ny = not na(time(timeframe.period, sessA, tz))
+    bool nyStart = ny and not ny[1]
+    int y = year(time, tz)
+    int m = month(time, tz)
+    int d = dayofmonth(time, tz)
+    int rangeStart = timestamp(tz, y, m, d, 9, 30)
+    int rangeEnd = rangeStart + 15 * 60 * 1000
+    int nyEnd = timestamp(tz, y, m, d, 16, 0)
+    var float orHigh = na
+    var float orLow = na
+    var bool done = false
+    if nyStart
+        orHigh := na
+        orLow := na
+        done := false
+    if array.size(ltfTime) > 0
+        for i = 0 to array.size(ltfTime) - 1
+            int t = array.get(ltfTime, i)
+            if t >= rangeStart and t < rangeEnd
+                orHigh := na(orHigh) ? array.get(ltfHigh, i) : math.max(orHigh, array.get(ltfHigh, i))
+                orLow := na(orLow) ? array.get(ltfLow, i) : math.min(orLow, array.get(ltfLow, i))
+    int sig = 0
+    bool eligible = ny and time >= rangeEnd and time_close < nyEnd and not na(orHigh) and not na(orLow)
+    if eligible and not done
+        sig := close > orHigh ? 1 : close < orLow ? -1 : 0
+        if sig != 0
+            done := true
+    [sig[1], ta.atr(14)[1]]
+
+// Two independent 5-minute Oscar engines, matching the tested first-signal
+// breakout/retest rules and one accepted setup per New York session.
+f_bskOscar5(int mode) =>
+    bool ny = not na(time(timeframe.period, sessA, tz))
+    bool nyStart = ny and not ny[1]
+    int y = year(time, tz)
+    int m = month(time, tz)
+    int d = dayofmonth(time, tz)
+    int rangeStart = timestamp(tz, y, m, d, 9, 30)
+    int rangeEnd = rangeStart + 15 * 60 * 1000
+    int nyEnd = timestamp(tz, y, m, d, 16, 0)
+    var float orHigh = na
+    var float orLow = na
+    var int pendingDir = 0
+    var int pendingBar = na
+    var int consecutive = 0
+    var bool done = false
+    if nyStart
+        orHigh := na
+        orLow := na
+        pendingDir := 0
+        pendingBar := na
+        consecutive := 0
+        done := false
+    if ny and time >= rangeStart and time < rangeEnd
+        orHigh := na(orHigh) ? high : math.max(orHigh, high)
+        orLow := na(orLow) ? low : math.min(orLow, low)
+    int sig = 0
+    bool eligible = ny and time >= rangeEnd and time_close < nyEnd and not na(orHigh) and not na(orLow)
+    if eligible and not done
+        int outside = close > orHigh ? 1 : close < orLow ? -1 : 0
+        if mode == 1
+            if outside != 0
+                if outside == pendingDir
+                    consecutive += 1
+                else
+                    pendingDir := outside
+                    consecutive := 1
+                if consecutive >= 2
+                    sig := outside
+            else
+                pendingDir := 0
+                consecutive := 0
+        else
+            if pendingDir == 0 and outside != 0
+                pendingDir := outside
+                pendingBar := bar_index
+            else if pendingDir != 0
+                if bar_index > pendingBar
+                    bool touched = pendingDir > 0 ? (low <= orHigh and close > orHigh) : (high >= orLow and close < orLow)
+                    if touched
+                        sig := pendingDir
+                    else if outside != 0 and outside != pendingDir
+                        pendingDir := 0
+                        pendingBar := na
+                    else if bar_index - pendingBar > 6
+                        pendingDir := 0
+                        pendingBar := na
+        if sig != 0
+            done := true
+    [sig[1], ta.atr(14)[1]]
+
+[bskBreak10Raw, bskBreak10Atr] = request.security(syminfo.tickerid, "10", f_bskOscarBreak10(), lookahead=barmerge.lookahead_on)
+[bskRetest5Raw, bskRetest5Atr] = request.security(syminfo.tickerid, "5", f_bskOscar5(0), lookahead=barmerge.lookahead_on)
+[bskFake5Raw, bskFake5Atr] = request.security(syminfo.tickerid, "5", f_bskOscar5(1), lookahead=barmerge.lookahead_on)
+
+bool bskNew5 = timeframe.change("5") and bskMNQCompatible  // basket is MNQ-only
+bool bskNew10 = timeframe.change("10") and bskMNQCompatible  // basket is MNQ-only
+bool bskNew15 = timeframe.change("15") and bskMNQCompatible  // basket is MNQ-only
+bool bskBreakEvent = bskOscarBreakOn and bskNew10 and bskBreak10Raw != 0
+bool bskRetestEvent = bskOscarRetestOn and bskNew5 and bskRetest5Raw != 0
+bool bskFakeEvent = bskOscarFakeoutOn and bskNew5 and bskFake5Raw != 0
+int bskLongSignals = (bskBreakEvent and bskBreak10Raw > 0 ? 1 : 0) + (bskRetestEvent and bskRetest5Raw > 0 ? 1 : 0) + (bskFakeEvent and bskFake5Raw > 0 ? 1 : 0)
+int bskShortSignals = (bskBreakEvent and bskBreak10Raw < 0 ? 1 : 0) + (bskRetestEvent and bskRetest5Raw < 0 ? 1 : 0) + (bskFakeEvent and bskFake5Raw < 0 ? 1 : 0)
+int bskSignalCount = bskLongSignals + bskShortSignals
+bool bskDirectionConflict = bskLongSignals > 0 and bskShortSignals > 0
+int bskCandidateDir = bskLongSignals > 0 ? 1 : bskShortSignals > 0 ? -1 : 0
+
+var int bskPosition = 0
+var int bskOwner = 0
+var int bskEntryBar = na
+var float bskEntry = na
+var float bskStop = na
+var float bskTargetPrice = na
+var float bskActiveRR = na
+var float bskNet = 0.0
+var float bskPeak = 0.0
+var int bskTotalTrades = 0
+var int bskTotalWins = 0
+var int bskTotalLosses = 0
+var int bskDuplicateSignals = 0
+var int bskConflicts = 0
+var int bskBlockedSignals = 0
+var int[] bskModelTrades = array.new_int(7, 0)
+var int[] bskModelWins = array.new_int(7, 0)
+var float[] bskModelNet = array.new_float(7, 0.0)
+var line bskEntryLine = na
+var line bskStopLine = na
+var line bskTargetLine = na
+var label bskEntryLabel = na
+var label bskStopLabel = na
+var label bskTargetLabel = na
+var label bskExitLabel = na
+int bskCutoff = pnlCutoff
+int bskContracts = 1
+float bskSlipPrice = bskSlipTicks * syminfo.mintick
+bool bskHadPositionAtOpen = bskPosition != 0
+int bskLocalMinute = hour(time, tz) * 60 + minute(time, tz)
+bool bskTimedFlat = bskLocalMinute >= 16 * 60
+
+// Existing exposure closes first. If one candle touches both levels, stop wins.
+if bskHadPositionAtOpen and bskPosition != 0
+    bool bskStopHit = bskPosition > 0 ? low <= bskStop : high >= bskStop
+    bool bskTargetHit = bskPosition > 0 ? high >= bskTargetPrice : low <= bskTargetPrice
+    bool bskExitByTime = bskTimedFlat and barstate.isconfirmed
+    bool bskExitByLevel = barstate.isconfirmed and bar_index > bskEntryBar and (bskStopHit or bskTargetHit)
+    if bskExitByTime or bskExitByLevel
+        bool bskWasStopped = not bskExitByTime and bskStopHit
+        float bskRawExit = bskExitByTime ? open : bskWasStopped ? bskStop : bskTargetPrice
+        float bskExitFill = bskRawExit - bskPosition * bskSlipPrice
+        float bskTradeNet = (bskExitFill - bskEntry) * bskPosition * syminfo.pointvalue * bskContracts - 2.0 * bskCommission * bskContracts
+        bskNet += bskTradeNet
+        bskPeak := math.max(bskPeak, bskNet)
+        bskTotalTrades += 1
+        bskTotalWins += bskTradeNet > 0 ? 1 : 0
+        bskTotalLosses += bskTradeNet <= 0 ? 1 : 0
+        int bskIx = bskOwner - 1
+        array.set(bskModelTrades, bskIx, array.get(bskModelTrades, bskIx) + 1)
+        array.set(bskModelWins, bskIx, array.get(bskModelWins, bskIx) + (bskTradeNet > 0 ? 1 : 0))
+        array.set(bskModelNet, bskIx, array.get(bskModelNet, bskIx) + bskTradeNet)
+        if not na(bskEntryLine)
+            line.set_x2(bskEntryLine, bar_index)
+            line.set_x2(bskStopLine, bar_index)
+            line.set_x2(bskTargetLine, bar_index)
+        if not na(bskEntryLabel)
+            label.set_text(bskEntryLabel, label.get_text(bskEntryLabel) + (bskWasStopped ? " • STOPPED" : bskExitByTime ? " • TIME EXIT" : " • TARGET HIT"))
+        bskExitLabel := label.new(bar_index + mtfLabelOffset, bskRawExit, (bskWasStopped ? "STOP" : bskExitByTime ? "TIME EXIT" : "TARGET " + str.tostring(bskActiveRR, "#.##") + "R") + "  " + (bskTradeNet >= 0 ? "+$" : "-$") + str.tostring(math.abs(bskTradeNet), "#.00"), style=label.style_label_left, color=bskWasStopped ? color.new(softBear, levelFade) : color.new(softBull, levelFade), textcolor=color.white, size=size.small)
+        bskPosition := 0
+        bskOwner := 0
+        bskEntryBar := na
+
+// Count exact simultaneous signals. Opposing directions are skipped rather
+// than arbitrarily choosing a side. A flat portfolio takes one priority signal.
+if barstate.isconfirmed and time >= bskCutoff and bskSignalCount > 0
+    int bskSameDirectionCopies = math.max(bskLongSignals, bskShortSignals)
+    if bskSameDirectionCopies > 1
+        bskDuplicateSignals += bskSameDirectionCopies - 1
+    if bskDirectionConflict
+        bskConflicts += 1
+    else if bskHadPositionAtOpen or bskPosition != 0
+        bskBlockedSignals += bskSignalCount
+    else
+        int bskChosenOwner = 0
+        float bskChosenAtr = na
+        float bskChosenRR = na
+        string bskChosenName = ""
+        if bskBreakEvent and bskBreak10Raw == bskCandidateDir
+            bskChosenOwner := 1
+            bskChosenAtr := bskBreak10Atr
+            bskChosenRR := bskOscarBreakRR
+            bskChosenName := "Oscar breakout 15m/10m"
+        else if bskRetestEvent and bskRetest5Raw == bskCandidateDir
+            bskChosenOwner := 2
+            bskChosenAtr := bskRetest5Atr
+            bskChosenRR := bskOscarRetestRR
+            bskChosenName := "Oscar retest 15m/5m"
+        else if bskFakeEvent and bskFake5Raw == bskCandidateDir
+            bskChosenOwner := 3
+            bskChosenAtr := bskFake5Atr
+            bskChosenRR := bskOscarFakeRR
+            bskChosenName := "Oscar fakeout 15m/5m"
+        if bskChosenOwner > 0
+            bskPosition := bskCandidateDir
+            bskOwner := bskChosenOwner
+            bskEntryBar := bar_index
+            bskEntry := open + bskPosition * bskSlipPrice
+            float bskRisk = math.max(nz(bskChosenAtr) * bskStopATR, syminfo.mintick)
+            bskActiveRR := bskChosenRR
+            bskStop := bskEntry - bskPosition * bskRisk
+            bskTargetPrice := bskEntry + bskPosition * bskRisk * bskActiveRR
+            bskEntryLine := line.new(bar_index, bskEntry, bar_index + levelLineBars, bskEntry, color=softBlue, width=3)
+            bskStopLine := line.new(bar_index, bskStop, bar_index + levelLineBars, bskStop, color=color.new(softBear, levelFade), width=3)
+            bskTargetLine := line.new(bar_index, bskTargetPrice, bar_index + levelLineBars, bskTargetPrice, color=color.new(softBull, levelFade), width=3)
+            string bskSharedTag = bskSignalCount > 1 ? " • " + str.tostring(bskSignalCount) + " same-entry signals" : ""
+            bskEntryLabel := label.new(bar_index + mtfLabelOffset, bskEntry, bskChosenName + (bskPosition > 0 ? " • LONG" : " • SHORT") + bskSharedTag, style=label.style_label_left, color=color.new(panelCream, levelFade), textcolor=panelInk, size=size.small)
+            alert(bskChosenName + (bskPosition > 0 ? " LONG " : " SHORT ") + syminfo.ticker + " @ " + str.tostring(bskEntry, format.mintick) + " | SL " + str.tostring(bskStop, format.mintick) + " | TP " + str.tostring(bskTargetPrice, format.mintick) + " (" + str.tostring(bskActiveRR, "#.#") + "R) | 1 contract | flat by 16:00 ET", alert.freq_once_per_bar)
+            bskStopLabel := label.new(bar_index + mtfLabelOffset, bskStop, "STOP LOSS", style=label.style_label_left, color=color.new(softBear, levelFade), textcolor=color.white, size=size.small)
+            bskTargetLabel := label.new(bar_index + mtfLabelOffset, bskTargetPrice, "TAKE PROFIT " + str.tostring(bskActiveRR, "#.##") + "R", style=label.style_label_left, color=color.new(softBull, levelFade), textcolor=color.white, size=size.small)
+            bool bskEntryStopHit = bskPosition > 0 ? low <= bskStop : high >= bskStop
+            bool bskEntryTargetHit = bskPosition > 0 ? high >= bskTargetPrice : low <= bskTargetPrice
+            if bskEntryStopHit or bskEntryTargetHit
+                bool bskWasStopped = bskEntryStopHit
+                float bskRawExit = bskWasStopped ? bskStop : bskTargetPrice
+                float bskExitFill = bskRawExit - bskPosition * bskSlipPrice
+                float bskTradeNet = (bskExitFill - bskEntry) * bskPosition * syminfo.pointvalue * bskContracts - 2.0 * bskCommission * bskContracts
+                bskNet += bskTradeNet
+                bskPeak := math.max(bskPeak, bskNet)
+                bskTotalTrades += 1
+                bskTotalWins += bskTradeNet > 0 ? 1 : 0
+                bskTotalLosses += bskTradeNet <= 0 ? 1 : 0
+                int bskIx = bskOwner - 1
+                array.set(bskModelTrades, bskIx, array.get(bskModelTrades, bskIx) + 1)
+                array.set(bskModelWins, bskIx, array.get(bskModelWins, bskIx) + (bskTradeNet > 0 ? 1 : 0))
+                array.set(bskModelNet, bskIx, array.get(bskModelNet, bskIx) + bskTradeNet)
+                line.set_x2(bskEntryLine, bar_index)
+                line.set_x2(bskStopLine, bar_index)
+                line.set_x2(bskTargetLine, bar_index)
+                label.set_text(bskEntryLabel, label.get_text(bskEntryLabel) + (bskWasStopped ? " • STOPPED" : " • TARGET HIT"))
+                bskExitLabel := label.new(bar_index + mtfLabelOffset, bskRawExit, (bskWasStopped ? "STOP" : "TARGET " + str.tostring(bskActiveRR, "#.##") + "R") + "  " + (bskTradeNet >= 0 ? "+$" : "-$") + str.tostring(math.abs(bskTradeNet), "#.00"), style=label.style_label_left, color=bskWasStopped ? color.new(softBear, levelFade) : color.new(softBull, levelFade), textcolor=color.white, size=size.small)
+                bskPosition := 0
+                bskOwner := 0
+                bskEntryBar := na
+
+if bskPosition != 0 and barstate.isconfirmed
+    line.set_x2(bskEntryLine, bar_index + levelLineBars)
+    line.set_x2(bskStopLine, bar_index + levelLineBars)
+    line.set_x2(bskTargetLine, bar_index + levelLineBars)
+
+// Running P&L: one dark table, old setups then new setups, each with a total.
+color pnlBg = #131722
+color pnlHead = #2A2E39
+color pnlText = #D1D4DC
+color pnlDim = #6A6D78
+color pnlUp = #26A69A
+color pnlDn = #EF5350
+var table pnl = table.new(position.top_right, 4, 30, bgcolor=pnlBg, frame_color=#363A45, frame_width=1, border_color=#20242E, border_width=1)
+f_pnlRow(int row, string name, int tr, int wn, float net, bool on, bool open, bool strong) =>
+    color bg = strong ? pnlHead : pnlBg
+    color fg = on ? pnlText : pnlDim
+    table.cell(pnl, 0, row, name + (open ? "  ●" : ""), text_color=fg, bgcolor=bg, text_halign=text.align_left, text_size=size.small)
+    table.cell(pnl, 1, row, str.tostring(tr), text_color=fg, bgcolor=bg, text_size=size.small)
+    table.cell(pnl, 2, row, tr > 0 ? str.tostring(100.0 * wn / tr, "#") + "%" : "–", text_color=fg, bgcolor=bg, text_size=size.small)
+    table.cell(pnl, 3, row, tr > 0 ? (net >= 0 ? "+$" : "-$") + str.tostring(math.abs(net), "#,###") : "–", text_color=tr == 0 ? pnlDim : net >= 0 ? pnlUp : pnlDn, bgcolor=bg, text_halign=text.align_right, text_size=size.small)
+f_pnlTitle(int row, string a, string b, string c, string d) =>
+    table.cell(pnl, 0, row, a, text_color=pnlText, bgcolor=pnlHead, text_halign=text.align_left, text_size=size.small)
+    table.cell(pnl, 1, row, b, text_color=pnlDim, bgcolor=pnlHead, text_size=size.small)
+    table.cell(pnl, 2, row, c, text_color=pnlDim, bgcolor=pnlHead, text_size=size.small)
+    table.cell(pnl, 3, row, d, text_color=pnlDim, bgcolor=pnlHead, text_size=size.small)
+f_pnlModel(int row, NewModel m, bool on) =>
+    f_pnlRow(row, m.tag + (m.gold ? " · GC" : " · NQ") + (m.sess == 0 ? " NY" : " Asia"), m.trades, m.wins, m.net, on, m.pos != 0, false)
+if barstate.islast and pnlShow
+    table.clear(pnl, 0, 0, 3, 29)
+    int r = 0
+    f_pnlTitle(r, "RUNNING P&L " + (pnlAll ? "· all history" : "· last " + str.tostring(pnlDays) + "d"), "Trades", "Win", "Net")
+    r += 1
+    // OLD SETUPS (Nasdaq NY)
+    bool oldHere = nmIsNasdaq or bskMNQCompatible
+    f_pnlTitle(r, "OLD SETUPS", "", "", oldHere ? "" : "MNQ chart")
+    r += 1
+    if oldHere
+        f_pnlRow(r, "LIMA 5m", nmLima.trades, nmLima.wins, nmLima.net, showMtfLima, nmLima.pos != 0, false)
+        r += 1
+        f_pnlRow(r, "MARCUS 15m", nmM15.trades, nmM15.wins, nmM15.net, showMtfMarcus15, nmM15.pos != 0, false)
+        r += 1
+        f_pnlRow(r, "MARCUS 30m", nmM30.trades, nmM30.wins, nmM30.net, showMtfMarcus30, nmM30.pos != 0, false)
+        r += 1
+        string[] bNames = array.from("OSCAR break", "OSCAR fakeout", "OSCAR retest")
+        int[] bIx = array.from(0, 2, 1)
+        bool[] bOn = array.from(bskOscarBreakOn, bskOscarFakeoutOn, bskOscarRetestOn)
+        for k = 0 to 2
+            int ix = array.get(bIx, k)
+            f_pnlRow(r, array.get(bNames, k), array.get(bskModelTrades, ix), array.get(bskModelWins, ix), array.get(bskModelNet, ix), array.get(bOn, k), bskPosition != 0 and bskOwner == ix + 1, false)
+            r += 1
+    int oT = oldHere ? nmLima.trades + nmM15.trades + nmM30.trades + bskTotalTrades : 0
+    int oW = oldHere ? nmLima.wins + nmM15.wins + nmM30.wins + bskTotalWins : 0
+    float oN = oldHere ? nmLima.net + nmM15.net + nmM30.net + bskNet : 0.0
+    f_pnlRow(r, "Old total", oT, oW, oN, true, false, true)
+    r += 1
+    // NEW SETUPS (only the ones that trade on this chart)
+    f_pnlTitle(r, "NEW SETUPS", "", "", "")
+    r += 1
+    array<NewModel> models = array.from(nmGolf, nmHotel, nmAlpha, nmKilo, nmMike, nmTango, nmSierra, nmVictor, nmEcho)
+    bool[] mOn = array.from(nmGolfOn, nmHotelOn, nmAlphaOn, nmKiloOn, nmMikeOn, nmTangoOn, nmSierraOn, nmVictorOn, nmEchoOn)
+    for k = 0 to 8
+        NewModel m = array.get(models, k)
+        if m.gold ? nmIsGold : nmIsNasdaq
+            f_pnlModel(r, m, array.get(mOn, k))
+            r += 1
+    f_pnlRow(r, "New total", nmTot.trades, nmTot.wins, nmTot.net, true, false, true)
+    r += 1
+    f_pnlRow(r, "ALL SETUPS", oT + nmTot.trades, oW + nmTot.wins, oN + nmTot.net, true, false, true)
+    r += 1
+    table.cell(pnl, 0, r, "1 contract · " + str.tostring(nmSlipTicks) + " tick/side · $" + str.tostring(nmCommission, "#.00") + "/side · ● in trade", text_color=pnlDim, bgcolor=pnlBg, text_halign=text.align_left, text_size=size.tiny)
+else if barstate.islast
+    table.clear(pnl, 0, 0, 3, 29)
+
+alertcondition(bskSignalCount > 0 and not bskDirectionConflict, "Selected strategy basket signal", "One or more selected MNQ strategies signaled. Basket deduplicates same-time, same-direction entries; inspect the active entry, stop, and target levels.")

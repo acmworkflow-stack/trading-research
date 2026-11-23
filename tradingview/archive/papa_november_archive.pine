@@ -1,0 +1,122 @@
+// ARCHIVED 2026-11-17: Papa and November, removed from market_structure_fvg_playbook_v2.pine
+// Why: prop-firm evaluation simulation (25K account rules) (in-sample, Aug 21 - Oct 30 MNQ data):
+//   Papa 30pt 1R: 51% wins but ~0% eval pass (expectancy ~0R). November 5m 56% / 10m 41% / 15m 32% pass,
+//   10m and 15m failed more evals than they passed. See research_2026-11-17.
+// To restore: paste the inputs back into the "Selected seven strategy basket" group, the functions and
+// request.security lines back above the bskNew5/10/15 events, add the four events back into
+// bskLongSignals / bskShortSignals and the priority chain (owners 4-7), restore the Papa 15:45 time exit
+// (bskTimedFlat) and fixed-point risk (bskRisk), and add their rows back to the P&L table.
+// Python versions for retesting: validate.py families "November AVWAP" and "Papa last-hour fade".
+
+bool bskNov5On = input.bool(true, "November • AVWAP 5m, 2σ", group=G_BASKET)
+
+bool bskNov10On = input.bool(true, "November • AVWAP 10m, 2σ", group=G_BASKET)
+
+bool bskNov15On = input.bool(true, "November • AVWAP 15m, 2σ", group=G_BASKET)
+
+bool bskPapaOn = input.bool(true, "Papa • 5m, 30-point reversion", group=G_BASKET)
+
+float bskNov5RR = input.float(2.0, "November 5m target R", minval=0.5, step=0.5, group=G_BASKET)
+
+float bskNov10RR = input.float(2.0, "November 10m target R", minval=0.5, step=0.5, group=G_BASKET)
+
+float bskNov15RR = input.float(2.0, "November 15m target R", minval=0.5, step=0.5, group=G_BASKET)
+
+float bskPapaRR = input.float(1.0, "Papa target R", minval=0.5, step=0.5, group=G_BASKET)
+
+float bskPapaPoints = input.float(30.0, "Papa fixed stop / target points", minval=1, step=1, group=G_BASKET)
+
+// New York anchored VWAP ±2 population standard deviations. The signal is a
+// completed-bar re-entry through the outer band, still on the VWAP side.
+f_bskNovember() =>
+    bool ny = not na(time(timeframe.period, sessA, tz))
+    bool nyStart = ny and not ny[1]
+    int y = year(time, tz)
+    int m = month(time, tz)
+    int d = dayofmonth(time, tz)
+    int nyEnd = timestamp(tz, y, m, d, 16, 0)
+    var float sumPV = 0.0
+    var float sumP2V = 0.0
+    var float sumV = 0.0
+    if nyStart
+        sumPV := 0.0
+        sumP2V := 0.0
+        sumV := 0.0
+    if ny
+        float v = math.max(nz(volume, 0.0), 0.0)
+        float tp = (high + low + close) / 3.0
+        sumPV += tp * v
+        sumP2V += tp * tp * v
+        sumV += v
+    float avwap = sumV > 0 ? sumPV / sumV : na
+    float variance = sumV > 0 ? math.max(sumP2V / sumV - avwap * avwap, 0.0) : na
+    float sigma = math.sqrt(variance)
+    float upper = avwap + 2.0 * sigma
+    float lower = avwap - 2.0 * sigma
+    bool prevNy = ny[1]
+    bool allowed = ny and prevNy and time_close < nyEnd  // first NY bar has no prior-bar band (backtest)
+    int sig = allowed and close[1] < lower[1] and close >= lower and close < avwap ? 1 :
+         allowed and close[1] > upper[1] and close <= upper and close > avwap ? -1 : 0
+    [sig[1], ta.atr(14)[1]]
+
+// Papa anchors at the 15:00 New York open, fades a 30-point extension, and
+// allows the next-open entry only through 15:40 so it can flatten at 15:45.
+f_bskPapa5() =>
+    bool ny = not na(time(timeframe.period, sessA, tz))
+    bool nyStart = ny and not ny[1]
+    int y = year(time, tz)
+    int m = month(time, tz)
+    int d = dayofmonth(time, tz)
+    int anchorTime = timestamp(tz, y, m, d, 15, 0)
+    int lastSignalTime = timestamp(tz, y, m, d, 15, 40)
+    var float anchor = na
+    var bool done = false
+    if nyStart
+        anchor := na
+        done := false
+    if ny and time == anchorTime
+        anchor := open
+    int sig = 0
+    if ny and not done and not na(anchor) and time > anchorTime and time < lastSignalTime
+        sig := close <= anchor - bskPapaPoints ? 1 : close >= anchor + bskPapaPoints ? -1 : 0
+        if sig != 0
+            done := true
+    sig[1]
+
+
+[bskNov5Raw, bskNov5Atr] = request.security(syminfo.tickerid, "5", f_bskNovember(), lookahead=barmerge.lookahead_on)
+
+[bskNov10Raw, bskNov10Atr] = request.security(syminfo.tickerid, "10", f_bskNovember(), lookahead=barmerge.lookahead_on)
+
+[bskNov15Raw, bskNov15Atr] = request.security(syminfo.tickerid, "15", f_bskNovember(), lookahead=barmerge.lookahead_on)
+
+bskPapa5Raw = request.security(syminfo.tickerid, "5", f_bskPapa5(), lookahead=barmerge.lookahead_on)
+
+bool bskNov5Event = bskNov5On and bskNew5 and bskNov5Raw != 0
+
+bool bskNov10Event = bskNov10On and bskNew10 and bskNov10Raw != 0
+
+bool bskNov15Event = bskNov15On and bskNew15 and bskNov15Raw != 0
+
+bool bskPapaEvent = bskPapaOn and bskNew5 and bskPapa5Raw != 0
+
+        else if bskNov5Event and bskNov5Raw == bskCandidateDir
+            bskChosenOwner := 4
+            bskChosenAtr := bskNov5Atr
+            bskChosenRR := bskNov5RR
+            bskChosenName := "November AVWAP 5m"
+        else if bskNov10Event and bskNov10Raw == bskCandidateDir
+            bskChosenOwner := 5
+            bskChosenAtr := bskNov10Atr
+            bskChosenRR := bskNov10RR
+            bskChosenName := "November AVWAP 10m"
+        else if bskNov15Event and bskNov15Raw == bskCandidateDir
+            bskChosenOwner := 6
+            bskChosenAtr := bskNov15Atr
+            bskChosenRR := bskNov15RR
+            bskChosenName := "November AVWAP 15m"
+        else if bskPapaEvent and bskPapa5Raw == bskCandidateDir
+            bskChosenOwner := 7
+            bskChosenAtr := bskPapaPoints
+            bskChosenRR := bskPapaRR
+            bskChosenName := "Papa 5m"
